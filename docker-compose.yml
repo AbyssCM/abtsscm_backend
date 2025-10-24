@@ -23,3 +23,11 @@ services:
       - DB_HOST=${DB_HOST}
       - DB_PORT=3306
       - DB_NAME=${DB_NAME}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+  pay-service:
+    build: ./pay-service
+    ports:
+      - "8002:8002"

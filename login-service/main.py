@@ -154,6 +154,9 @@ async def submit_user_data(request: Request, data: SubmitRequest):
 
     kakao_info = kakao_res.json()
     kakao_id = kakao_info.get("id")
+    kakao_account = kakao_info.get("kakao_account", {})
+    email = kakao_account.get("email")
+    print(email)
 
     # 4. 생년월일 + 시간 + 양력/음력 + 오전/오후 합치기
     birth_time = f"{data.birthTime[:2]}:{data.birthTime[2:]}"

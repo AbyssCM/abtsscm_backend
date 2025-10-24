@@ -73,10 +73,11 @@ class UserOut(BaseModel):
 
 
 # AWS S3 설정
-AWS_ACCESS_KEY_ID = "AKIA5HCYWFV3HDJFM5HY"
-AWS_SECRET_ACCESS_KEY = "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"
-AWS_REGION = "ap-northeast-2"  # 예시: 서울
-S3_BUCKET_NAME = "abysscm-users-files"
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_REGION = os.getenv("AWS_REGION")
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
+
 
 s3_client = boto3.client(
     "s3",
@@ -136,6 +137,7 @@ def add_user(data: AddUserRequest, db: Session = Depends(get_db)):
     ampm_str = "오전" if data.ampm == "AM" else "오후"
     final_birth_str = f"{data.birthDate} {birth_time} {ampm_str} ({calendar_str})"
 
+    # ✅ User 생성 (결제 필드 추가, 문법 수정)
     user = User(
         user_id=int(data.kakao_id),
         name=data.username,
@@ -145,7 +147,9 @@ def add_user(data: AddUserRequest, db: Session = Depends(get_db)):
         gender=data.gender if data.gender in ("남", "여") else None,
         birth_date=final_birth_str,
         matching_count=int(data.matching_count) if data.matching_count else 0,
-        status=data.status if data.status in ("매칭전","매칭중","성혼","만료") else "매칭전"
+        status=data.status if data.status in ("매칭전", "매칭중", "성혼", "만료") else "매칭전",
+        membership_type="일반회원",   # ✅ 기본값 추가
+        payment_date=None            # ✅ 결제일은 없음
     )
 
     try:
@@ -157,17 +161,22 @@ def add_user(data: AddUserRequest, db: Session = Depends(get_db)):
         print(f"DB 삽입 오류: {e}")
         raise HTTPException(status_code=500, detail=f"User service DB 삽입 실패: {e}")
 
-    return {"status": "success", "user": {
-        "user_id": user.user_id,
-        "name": user.name,
-        "email": user.email,
-        "phone_number": user.phone_number,
-        "age": user.age,
-        "gender": user.gender,
-        "birth_date": user.birth_date,
-        "matching_count": user.matching_count,
-        "status": user.status
-    }}
+    return {
+        "status": "success",
+        "user": {
+            "user_id": user.user_id,
+            "name": user.name,
+            "email": user.email,
+            "phone_number": user.phone_number,
+            "age": user.age,
+            "gender": user.gender,
+            "birth_date": user.birth_date,
+            "matching_count": user.matching_count,
+            "status": user.status,
+            "membership_type": user.membership_type,   # ✅ 응답에도 추가
+            "payment_date": user.payment_date          # ✅ 응답에도 추가
+        }
+    }
 
 @app.get("/users/{kakao_id}")
 def get_user(kakao_id: int, db: Session = Depends(get_db)):

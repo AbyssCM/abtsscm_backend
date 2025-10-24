@@ -50,4 +50,12 @@ class User(Base):
     first_consultation = Column(DateTime, nullable=True)        # 최초 상담일
     last_consultation = Column(DateTime, nullable=True)         # 마지막 상담일
     consultation_count = Column(Integer, default=0)             # 상담횟수
-    matched_partner = Column(BigInteger, nullable=True)  # ✅ 추가
+    matched_partner = Column(BigInteger, nullable=True)          # 매칭된 상대 회원 ID
+
+    # ✅ 결제 관련 컬럼
+    membership_type = Column(
+        Enum("일반회원", "정회원", "결제회원", name="membership_enum"),
+        default="일반회원",
+        nullable=False
+    )                                                           # 결제정보 (회원 등급)
+    payment_date = Column(DateTime, nullable=True)              # 결제일
