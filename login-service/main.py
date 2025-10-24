@@ -15,7 +15,7 @@ app = FastAPI()
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://www.abysscm.com","http://www.abysscm.com:5173","http://www.abysscm.com:5174"],
+    allow_origins=["http://www.abysscm.com","http://www.abysscm.com:5173","http://www.abysscm.com:5174","http://admin.abysscm.com","http://admin.abysscm.com:5173","http://admin.abysscm.com:5174"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
