@@ -29,7 +29,7 @@ architecture:
 
     - name: user-service
       port: 8001
-      responsibility: "회원 정보 CRUD, 매칭 관리, 관리자 기능"
+      responsibility: "회원 정보 CRUD, 매칭 관리, 상담/만남 관리"
       entrypoint: user-service/main.py
       database: PostgreSQL
       external_services:
@@ -40,6 +40,8 @@ architecture:
         - 회원 필터링 검색
         - 회원 탈퇴/추방
         - 통계 대시보드
+        - 상담 요청/관리
+        - 만남 일정/후기 관리
 
     - name: pay-service
       port: 8002
@@ -53,6 +55,19 @@ architecture:
         - 결제 준비/승인
         - 결제 내역 조회
         - 회원 등급 업데이트
+
+    - name: place-service
+      port: 8003
+      responsibility: "데이트 장소 큐레이팅 (네이버 지도)"
+      entrypoint: place-service/main.py
+      database: PostgreSQL
+      external_services:
+        - Naver Local Search API
+      features:
+        - 장소 검색 (네이버 API)
+        - 카테고리 기반 추천
+        - 데이트 코스 생성/공유
+        - 장소 정보 캐싱
 
 technology_stack:
   framework: FastAPI
@@ -81,6 +96,14 @@ key_files:
   payment:
     - path: pay-service/main.py
       description: "토스페이먼츠 결제 처리"
+
+  place_curation:
+    - path: place-service/main.py
+      description: "장소 검색 및 코스 관리 API"
+    - path: place-service/db.py
+      description: "장소/코스 DB 모델 정의"
+    - path: place-service/naver_api.py
+      description: "네이버 지역 검색 API 연동"
 
   configuration:
     - path: docker-compose.yml
@@ -118,6 +141,65 @@ data_models:
       - role: String(20) - 역할 (super_admin/admin)
       - created_at: DateTime - 생성일
 
+  Consultation:
+    table: consultations
+    primary_key: id
+    fields:
+      - user_id: BigInteger - 요청 회원 ID
+      - requested_date: Date - 희망 상담일
+      - requested_time: String(10) - 희망 시간
+      - consultation_type: String(20) - 초기상담/매칭상담/사후상담
+      - description: Text - 상담 내용
+      - status: String(20) - 요청됨/확인됨/완료됨/취소됨
+      - admin_note: Text - 관리자 메모
+      - confirmed_date: Date - 확정 상담일
+      - confirmed_time: String(10) - 확정 시간
+
+  Meeting:
+    table: meetings
+    primary_key: id
+    fields:
+      - user_id: BigInteger - 요청 회원 ID
+      - partner_id: BigInteger - 상대 회원 ID
+      - meeting_date: Date - 만남 날짜
+      - meeting_time: String(10) - 만남 시간
+      - location: String(200) - 만남 장소
+      - status: String(20) - 예약됨/완료됨/취소됨
+
+  MeetingReview:
+    table: meeting_reviews
+    primary_key: id
+    fields:
+      - meeting_id: Integer - 만남 ID
+      - reviewer_id: BigInteger - 작성자 ID
+      - reviewed_id: BigInteger - 평가 대상 ID
+      - rating: Integer - 1-5점 평가
+      - content: Text - 후기 내용
+      - next_meeting_intent: String(20) - 원함/미정/원하지않음
+      - is_private: Boolean - 관리자만 열람
+
+  DatePlace:
+    table: date_places
+    primary_key: id
+    fields:
+      - naver_place_id: String(100) - 네이버 장소 ID
+      - name: String(200) - 장소명
+      - category: String(100) - 카테고리
+      - address: String(500) - 주소
+      - latitude: Float - 위도
+      - longitude: Float - 경도
+
+  DateCourse:
+    table: date_courses
+    primary_key: id
+    fields:
+      - creator_id: BigInteger - 생성자 ID
+      - title: String(200) - 코스 제목
+      - description: Text - 코스 설명
+      - is_shared: Boolean - 공유 여부
+      - shared_with: BigInteger - 공유 대상 ID
+      - status: String(20) - 작성중/완성/사용됨
+
 api_endpoints:
   login-service:
     public:
@@ -149,6 +231,38 @@ api_endpoints:
       - method: PATCH
         path: /users/{user_id}/membership
         description: "회원 등급 업데이트"
+    consultation:
+      - method: POST
+        path: /consultations
+        description: "상담 요청 생성"
+      - method: GET
+        path: /consultations/my
+        description: "내 상담 목록"
+      - method: GET
+        path: /consultations/{id}
+        description: "상담 상세 조회"
+      - method: PUT
+        path: /consultations/{id}/cancel
+        description: "상담 취소"
+    meeting:
+      - method: POST
+        path: /meetings
+        description: "만남 일정 생성"
+      - method: GET
+        path: /meetings/my
+        description: "내 만남 목록"
+      - method: GET
+        path: /meetings/{id}
+        description: "만남 상세 조회"
+      - method: PUT
+        path: /meetings/{id}/complete
+        description: "만남 완료 처리"
+      - method: PUT
+        path: /meetings/{id}/cancel
+        description: "만남 취소"
+      - method: POST
+        path: /meetings/{id}/reviews
+        description: "만남 후기 작성"
     admin:
       - method: GET
         path: /admin/users
@@ -189,6 +303,24 @@ api_endpoints:
       - method: GET
         path: /admin/stats
         description: "통계 대시보드"
+      - method: GET
+        path: /admin/consultations
+        description: "전체 상담 목록"
+      - method: PUT
+        path: /admin/consultations/{id}/confirm
+        description: "상담 확정"
+      - method: PUT
+        path: /admin/consultations/{id}/complete
+        description: "상담 완료 처리"
+      - method: GET
+        path: /admin/meetings
+        description: "전체 만남 목록"
+      - method: GET
+        path: /admin/reviews
+        description: "전체 후기 열람"
+      - method: GET
+        path: /admin/meetings/stats
+        description: "만남 통계"
 
   pay-service:
     public:
@@ -201,6 +333,58 @@ api_endpoints:
       - method: GET
         path: /payments/{payment_key}
         description: "결제 내역 조회"
+      - method: GET
+        path: /health
+        description: "헬스체크"
+
+  place-service:
+    search:
+      - method: GET
+        path: /places/search
+        description: "장소 검색 (네이버 API)"
+        params:
+          - query: 검색어
+          - display: 결과 개수 (1-5)
+      - method: GET
+        path: /places/category
+        description: "카테고리 기반 장소 검색"
+        params:
+          - location: 위치 (강남, 홍대 등)
+          - category: 카테고리 (카페, 레스토랑 등)
+      - method: GET
+        path: /places/categories
+        description: "사용 가능한 카테고리 목록"
+      - method: GET
+        path: /places/{place_id}
+        description: "캐싱된 장소 상세 정보"
+    course:
+      - method: POST
+        path: /courses
+        description: "데이트 코스 생성"
+      - method: GET
+        path: /courses/my
+        description: "내 코스 목록"
+      - method: GET
+        path: /courses/shared
+        description: "공유받은 코스 목록"
+      - method: GET
+        path: /courses/{course_id}
+        description: "코스 상세 (장소 포함)"
+      - method: POST
+        path: /courses/{course_id}/places
+        description: "코스에 장소 추가"
+      - method: DELETE
+        path: /courses/{course_id}/places/{place_id}
+        description: "코스에서 장소 제거"
+      - method: POST
+        path: /courses/{course_id}/share
+        description: "매칭 상대와 코스 공유"
+      - method: PUT
+        path: /courses/{course_id}/complete
+        description: "코스 완성 처리"
+      - method: DELETE
+        path: /courses/{course_id}
+        description: "코스 삭제"
       - method: GET
         path: /health
         description: "헬스체크"
@@ -225,6 +409,14 @@ external_integrations:
     type: Object Storage
     usage: 사용자 메모 JSON 저장
     path_pattern: "user_updates/{user_id}.json"
+
+  naver_maps:
+    type: Map/Search API
+    base_url: https://openapi.naver.com/v1/search/local.json
+    auth: X-Naver-Client-Id, X-Naver-Client-Secret
+    endpoints:
+      local_search: /v1/search/local.json
+    rate_limit: 25000/day
 
 environment_variables:
   login-service:
@@ -256,6 +448,17 @@ environment_variables:
       - TOSS_SECRET_KEY
       - USER_SERVICE_URL
     optional: []
+
+  place-service:
+    required:
+      - DB_USER
+      - DB_PASSWORD
+      - DB_HOST
+      - DB_NAME
+      - NAVER_CLIENT_ID
+      - NAVER_CLIENT_SECRET
+    optional:
+      - DB_PORT  # default: 5432
 
 constraints:
   scale: "DAU ~100 (MVP)"

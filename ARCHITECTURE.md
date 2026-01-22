@@ -39,12 +39,18 @@
                                     │   │     :8002       │                           │
                                     │   └────────┬────────┘                           │
                                     │            │                                     │
+                                    │   ┌─────────────────┐                           │
+                                    │   │  place-service  │                           │
+                                    │   │     :8003       │                           │
+                                    │   └────────┬────────┘                           │
+                                    │            │                                     │
                                     └────────────┼─────────────────────────────────────┘
                                                  │
-                                                 ▼
-                                    ┌─────────────────────────┐
-                                    │    Toss Payments API    │
-                                    └─────────────────────────┘
+                              ┌──────────────────┼──────────────────┐
+                              ▼                  ▼                  ▼
+                ┌─────────────────────┐  ┌─────────────┐  ┌─────────────────┐
+                │  Toss Payments API  │  │  Kakao API  │  │  Naver Maps API │
+                └─────────────────────┘  └─────────────┘  └─────────────────┘
 ```
 
 ## Services
@@ -69,17 +75,35 @@
 
 | 항목 | 설명 |
 |------|------|
-| 책임 | 회원 정보 CRUD, 매칭 관리 |
+| 책임 | 회원 정보 CRUD, 매칭 관리, 상담/만남 관리 |
 | 기술 | FastAPI, SQLAlchemy, PostgreSQL |
 | 외부 연동 | AWS S3 (메모 저장) |
 
-**엔드포인트:**
+**회원 엔드포인트:**
 | Method | Path | 설명 |
 |--------|------|------|
 | POST | `/users/login-or-register` | 로그인/등록 확인 |
 | POST | `/users/add` | 새 회원 추가 |
 | GET | `/users/{kakao_id}` | 회원 정보 조회 |
 | PATCH | `/users/{user_id}/membership` | 회원 등급 업데이트 |
+
+**상담 엔드포인트:**
+| Method | Path | 설명 |
+|--------|------|------|
+| POST | `/consultations` | 상담 요청 생성 |
+| GET | `/consultations/my` | 내 상담 목록 |
+| GET | `/consultations/{id}` | 상담 상세 조회 |
+| PUT | `/consultations/{id}/cancel` | 상담 취소 |
+
+**만남 엔드포인트:**
+| Method | Path | 설명 |
+|--------|------|------|
+| POST | `/meetings` | 만남 일정 생성 |
+| GET | `/meetings/my` | 내 만남 목록 |
+| GET | `/meetings/{id}` | 만남 상세 조회 |
+| PUT | `/meetings/{id}/complete` | 만남 완료 처리 |
+| PUT | `/meetings/{id}/cancel` | 만남 취소 |
+| POST | `/meetings/{id}/reviews` | 후기 작성 |
 
 **관리자 전용 엔드포인트:**
 | Method | Path | 설명 |
@@ -95,6 +119,12 @@
 | DELETE | `/admin/users/{user_id}` | 회원 탈퇴 처리 |
 | POST | `/admin/users/{user_id}/ban` | 회원 추방 (블랙리스트) |
 | GET | `/admin/stats` | 통계 대시보드 (회원수, 매칭수 등) |
+| GET | `/admin/consultations` | 전체 상담 목록 |
+| PUT | `/admin/consultations/{id}/confirm` | 상담 확정 |
+| PUT | `/admin/consultations/{id}/complete` | 상담 완료 처리 |
+| GET | `/admin/meetings` | 전체 만남 목록 |
+| GET | `/admin/reviews` | 전체 후기 열람 |
+| GET | `/admin/meetings/stats` | 만남 통계 |
 
 ### pay-service (Port 8002)
 
@@ -110,6 +140,36 @@
 | POST | `/payments/ready` | 결제 준비 |
 | POST | `/payments/confirm` | 결제 승인 |
 | GET | `/payments/{payment_key}` | 결제 내역 조회 |
+| GET | `/health` | 헬스체크 |
+
+### place-service (Port 8003)
+
+| 항목 | 설명 |
+|------|------|
+| 책임 | 데이트 장소 큐레이팅 |
+| 기술 | FastAPI, Naver Maps API |
+| 외부 연동 | 네이버 지역 검색 API |
+
+**장소 검색 엔드포인트:**
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/places/search` | 장소 검색 (네이버 API) |
+| GET | `/places/category` | 카테고리 기반 장소 검색 |
+| GET | `/places/categories` | 사용 가능한 카테고리 목록 |
+| GET | `/places/{place_id}` | 캐싱된 장소 상세 정보 |
+
+**코스 관리 엔드포인트:**
+| Method | Path | 설명 |
+|--------|------|------|
+| POST | `/courses` | 데이트 코스 생성 |
+| GET | `/courses/my` | 내 코스 목록 |
+| GET | `/courses/shared` | 공유받은 코스 목록 |
+| GET | `/courses/{course_id}` | 코스 상세 (장소 포함) |
+| POST | `/courses/{course_id}/places` | 코스에 장소 추가 |
+| DELETE | `/courses/{course_id}/places/{place_id}` | 코스에서 장소 제거 |
+| POST | `/courses/{course_id}/share` | 매칭 상대와 코스 공유 |
+| PUT | `/courses/{course_id}/complete` | 코스 완성 처리 |
+| DELETE | `/courses/{course_id}` | 코스 삭제 |
 | GET | `/health` | 헬스체크 |
 
 ## Data Flow
@@ -161,6 +221,91 @@ CREATE TABLE users (
 );
 ```
 
+### Consultation 테이블 (상담 요청)
+
+```sql
+CREATE TABLE consultations (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(user_id),
+    requested_date DATE NOT NULL,        -- 희망 상담일
+    requested_time VARCHAR(10) NOT NULL, -- 희망 시간
+    consultation_type VARCHAR(20) NOT NULL, -- 초기상담/매칭상담/사후상담
+    description TEXT,                    -- 상담 내용
+    status VARCHAR(20) DEFAULT '요청됨', -- 요청됨/확인됨/완료됨/취소됨
+    admin_note TEXT,                     -- 관리자 메모
+    confirmed_date DATE,                 -- 확정된 상담일
+    confirmed_time VARCHAR(10),          -- 확정된 시간
+    created_at TIMESTAMP
+);
+```
+
+### Meeting 테이블 (만남 일정)
+
+```sql
+CREATE TABLE meetings (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(user_id),
+    partner_id BIGINT REFERENCES users(user_id),
+    meeting_date DATE NOT NULL,          -- 만남 날짜
+    meeting_time VARCHAR(10),            -- 만남 시간
+    location VARCHAR(200),               -- 만남 장소
+    status VARCHAR(20) DEFAULT '예약됨', -- 예약됨/완료됨/취소됨
+    created_at TIMESTAMP
+);
+```
+
+### MeetingReview 테이블 (만남 후기)
+
+```sql
+CREATE TABLE meeting_reviews (
+    id SERIAL PRIMARY KEY,
+    meeting_id INTEGER REFERENCES meetings(id),
+    reviewer_id BIGINT REFERENCES users(user_id),
+    reviewed_id BIGINT REFERENCES users(user_id),
+    rating INTEGER NOT NULL,             -- 1-5점 평가
+    content TEXT,                        -- 후기 내용
+    next_meeting_intent VARCHAR(20),     -- 원함/미정/원하지않음
+    is_private BOOLEAN DEFAULT TRUE,     -- 관리자만 열람
+    created_at TIMESTAMP
+);
+```
+
+### DatePlace 테이블 (장소 캐싱)
+
+```sql
+CREATE TABLE date_places (
+    id SERIAL PRIMARY KEY,
+    naver_place_id VARCHAR(100) UNIQUE,
+    name VARCHAR(200) NOT NULL,
+    category VARCHAR(100),
+    address VARCHAR(500),
+    road_address VARCHAR(500),
+    latitude FLOAT,
+    longitude FLOAT,
+    phone VARCHAR(20),
+    description TEXT,
+    image_url VARCHAR(500),
+    homepage_url VARCHAR(500),
+    created_at TIMESTAMP
+);
+```
+
+### DateCourse 테이블 (데이트 코스)
+
+```sql
+CREATE TABLE date_courses (
+    id SERIAL PRIMARY KEY,
+    creator_id BIGINT NOT NULL,          -- 생성자 user_id
+    title VARCHAR(200) NOT NULL,
+    description TEXT,
+    is_shared BOOLEAN DEFAULT FALSE,
+    shared_with BIGINT,                  -- 공유 대상 user_id
+    shared_at TIMESTAMP,
+    status VARCHAR(20) DEFAULT '작성중', -- 작성중/완성/사용됨
+    created_at TIMESTAMP
+);
+```
+
 ## Infrastructure
 
 ### AWS Resources
@@ -178,6 +323,7 @@ services:
   login-service:  8000:8000
   user-service:   8001:8001
   pay-service:    8002:8002
+  place-service:  8003:8003
 ```
 
 ## Security
@@ -227,6 +373,17 @@ TOSS_SECRET_KEY=         # 토스 시크릿 키
 USER_SERVICE_URL=        # user-service 내부 URL
 ```
 
+### place-service
+```env
+DB_USER=                 # PostgreSQL 사용자
+DB_PASSWORD=             # PostgreSQL 비밀번호
+DB_HOST=                 # PostgreSQL 호스트
+DB_PORT=5432             # PostgreSQL 포트
+DB_NAME=                 # 데이터베이스 이름
+NAVER_CLIENT_ID=         # 네이버 Client ID
+NAVER_CLIENT_SECRET=     # 네이버 Client Secret
+```
+
 ## Scaling Strategy
 
 ### 현재 (DAU ~100)
@@ -257,3 +414,4 @@ docker-compose logs -f
 - login-service: http://localhost:8000/docs
 - user-service: http://localhost:8001/docs
 - pay-service: http://localhost:8002/docs
+- place-service: http://localhost:8003/docs
