@@ -16,35 +16,45 @@
 ## System Architecture
 
 ```
-                                    ┌─────────────────────────────────────────────────┐
-                                    │                   AWS Cloud                      │
-                                    ├─────────────────────────────────────────────────┤
-                                    │                                                  │
-┌──────────────────┐                │   ┌─────────────────┐                           │
-│  React Frontend  │                │   │  login-service  │                           │
-│  (www.abysscm)   │───────────────▶│   │     :8000       │                           │
-└──────────────────┘                │   └────────┬────────┘                           │
-                                    │            │                                     │
-┌──────────────────┐                │            ▼                                     │
-│  Admin Frontend  │                │   ┌─────────────────┐      ┌─────────────────┐  │
-│ (admin.abysscm)  │───────────────▶│   │  user-service   │─────▶│ RDS PostgreSQL  │  │
-└──────────────────┘                │   │     :8001       │      │   (db.t3.micro) │  │
-                                    │   └────────┬────────┘      └─────────────────┘  │
-                                    │            │                                     │
-                                    │            │               ┌─────────────────┐  │
-                                    │            └──────────────▶│     AWS S3      │  │
-                                    │                            │   (메모 저장)    │  │
-                                    │   ┌─────────────────┐      └─────────────────┘  │
-                                    │   │   pay-service   │                           │
-                                    │   │     :8002       │                           │
-                                    │   └────────┬────────┘                           │
-                                    │            │                                     │
-                                    │   ┌─────────────────┐                           │
-                                    │   │  place-service  │                           │
-                                    │   │     :8003       │                           │
-                                    │   └────────┬────────┘                           │
-                                    │            │                                     │
-                                    └────────────┼─────────────────────────────────────┘
+                                    ┌──────────────────────────────────────────────────────────┐
+                                    │                        AWS Cloud                          │
+                                    ├──────────────────────────────────────────────────────────┤
+                                    │                                                           │
+┌──────────────────┐                │   ┌─────────────────┐                                    │
+│  React Frontend  │                │   │  login-service  │                                    │
+│  (www.abysscm)   │───────────────▶│   │     :8000       │                                    │
+└──────────────────┘                │   └────────┬────────┘                                    │
+                                    │            │                                              │
+┌──────────────────┐                │            ▼                                              │
+│  Admin Frontend  │                │   ┌─────────────────┐      ┌─────────────────┐           │
+│ (admin.abysscm)  │───────────────▶│   │  user-service   │─────▶│ RDS PostgreSQL  │           │
+└──────────────────┘                │   │     :8001       │      │   (db.t3.micro) │           │
+                                    │   └────────┬────────┘      └─────────────────┘           │
+                                    │            │                        ▲                     │
+                                    │            │               ┌────────┴────────┐           │
+                                    │            └──────────────▶│     AWS S3      │           │
+                                    │                            │  (사진/메모)     │           │
+                                    │   ┌─────────────────┐      └─────────────────┘           │
+                                    │   │   pay-service   │                                    │
+                                    │   │     :8002       │                                    │
+                                    │   └────────┬────────┘                                    │
+                                    │            │                                              │
+                                    │   ┌─────────────────┐                                    │
+                                    │   │  place-service  │                                    │
+                                    │   │     :8003       │                                    │
+                                    │   └────────┬────────┘                                    │
+                                    │            │                                              │
+                                    │   ┌─────────────────┐      ┌─────────────────┐           │
+                                    │   │ notification-   │─────▶│  Firebase FCM   │           │
+                                    │   │ service :8004   │      └─────────────────┘           │
+                                    │   └─────────────────┘                                    │
+                                    │            │                                              │
+                                    │   ┌─────────────────┐                                    │
+                                    │   │  chat-service   │◀─────WebSocket                     │
+                                    │   │     :8005       │                                    │
+                                    │   └────────┬────────┘                                    │
+                                    │            │                                              │
+                                    └────────────┼──────────────────────────────────────────────┘
                                                  │
                               ┌──────────────────┼──────────────────┐
                               ▼                  ▼                  ▼
@@ -126,6 +136,50 @@
 | GET | `/admin/reviews` | 전체 후기 열람 |
 | GET | `/admin/meetings/stats` | 만남 통계 |
 
+**프로필 엔드포인트:**
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/profile/my` | 내 프로필 조회 |
+| PUT | `/profile/my` | 프로필 수정 |
+| POST | `/profile/photos` | 사진 업로드 (S3) |
+| DELETE | `/profile/photos/{id}` | 사진 삭제 |
+| PUT | `/profile/photos/{id}/order` | 사진 순서 변경 |
+
+**매칭 추천 엔드포인트:**
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/recommendations` | 내 추천 목록 |
+| POST | `/admin/recommendations/calculate` | 점수 재계산 |
+
+**성혼 후기 엔드포인트:**
+| Method | Path | 설명 |
+|--------|------|------|
+| POST | `/success-stories` | 성혼 후기 작성 |
+| GET | `/success-stories/public` | 공개 후기 목록 |
+| GET | `/admin/success-stories` | 전체 후기 관리 |
+| PUT | `/admin/success-stories/{id}/approve` | 후기 승인 |
+| PUT | `/admin/success-stories/{id}/reject` | 후기 거부 |
+
+**추천인 엔드포인트:**
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/referral/my-code` | 내 추천 코드 조회 |
+| POST | `/referral/apply` | 추천 코드 적용 |
+| GET | `/referral/my-referrals` | 내가 추천한 사람 목록 |
+| GET | `/admin/referrals` | 전체 추천 현황 |
+| PUT | `/admin/referrals/{id}/reward` | 보상 지급 처리 |
+
+**대시보드 엔드포인트:**
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/admin/dashboard` | 종합 대시보드 |
+| GET | `/admin/analytics/users` | 사용자 분석 |
+| GET | `/admin/analytics/matches` | 매칭 분석 |
+| GET | `/admin/analytics/consultations` | 상담 분석 |
+| GET | `/admin/photos/pending` | 승인 대기 사진 |
+| PUT | `/admin/photos/{id}/approve` | 사진 승인 |
+| PUT | `/admin/photos/{id}/reject` | 사진 거부 |
+
 ### pay-service (Port 8002)
 
 | 항목 | 설명 |
@@ -171,6 +225,53 @@
 | PUT | `/courses/{course_id}/complete` | 코스 완성 처리 |
 | DELETE | `/courses/{course_id}` | 코스 삭제 |
 | GET | `/health` | 헬스체크 |
+
+### notification-service (Port 8004)
+
+| 항목 | 설명 |
+|------|------|
+| 책임 | 푸시 알림 관리 (FCM) |
+| 기술 | FastAPI, Firebase Admin SDK |
+| 외부 연동 | Firebase Cloud Messaging |
+
+**엔드포인트:**
+| Method | Path | 설명 |
+|--------|------|------|
+| POST | `/devices/register` | FCM 토큰 등록 |
+| DELETE | `/devices/{token}` | FCM 토큰 삭제 |
+| POST | `/send` | 알림 전송 (내부용) |
+| POST | `/send/batch` | 배치 알림 전송 |
+| GET | `/notifications/my` | 내 알림 목록 |
+| PUT | `/notifications/{id}/read` | 알림 읽음 처리 |
+| GET | `/health` | 헬스체크 |
+
+### chat-service (Port 8005)
+
+| 항목 | 설명 |
+|------|------|
+| 책임 | 실시간 채팅 (WebSocket) |
+| 기술 | FastAPI, WebSocket, SQLAlchemy |
+| 외부 연동 | AWS S3 (이미지), notification-service |
+
+**REST 엔드포인트:**
+| Method | Path | 설명 |
+|--------|------|------|
+| POST | `/rooms` | 채팅방 생성 |
+| GET | `/rooms` | 내 채팅방 목록 |
+| GET | `/rooms/{room_id}/messages` | 메시지 기록 조회 |
+| POST | `/rooms/{room_id}/messages` | 메시지 전송 |
+| POST | `/rooms/{room_id}/images` | 이미지 업로드 |
+| GET | `/health` | 헬스체크 |
+
+**WebSocket 엔드포인트:**
+| Path | 설명 |
+|------|------|
+| `/ws/{room_id}?user_id=` | 실시간 채팅 연결 |
+
+**WebSocket 메시지 타입:**
+- `message`: 텍스트/이미지 메시지
+- `typing`: 타이핑 인디케이터
+- `read`: 읽음 처리
 
 ## Data Flow
 
@@ -306,6 +407,110 @@ CREATE TABLE date_courses (
 );
 ```
 
+### UserProfile 테이블 (상세 프로필)
+
+```sql
+CREATE TABLE user_profiles (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT UNIQUE REFERENCES users(user_id),
+    height INTEGER,                      -- 키 (cm)
+    job VARCHAR(100),                    -- 직업
+    company VARCHAR(100),                -- 회사/학교
+    education VARCHAR(50),               -- 학력
+    religion VARCHAR(20),                -- 종교
+    smoking VARCHAR(20),                 -- 흡연 여부
+    drinking VARCHAR(20),                -- 음주 여부
+    mbti VARCHAR(4),
+    hobbies TEXT,                        -- JSON 배열
+    introduction TEXT,                   -- 자기소개
+    ideal_age_min INTEGER,
+    ideal_age_max INTEGER,
+    ideal_height_min INTEGER,
+    ideal_height_max INTEGER,
+    ideal_location VARCHAR(100),
+    ideal_religion VARCHAR(20),
+    ideal_smoking VARCHAR(20),
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+```
+
+### UserPhoto 테이블 (프로필 사진)
+
+```sql
+CREATE TABLE user_photos (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(user_id),
+    photo_url VARCHAR(500) NOT NULL,     -- S3 URL
+    photo_type VARCHAR(20),              -- profile/additional
+    order_index INTEGER DEFAULT 0,
+    is_approved BOOLEAN DEFAULT FALSE,   -- 관리자 승인
+    created_at TIMESTAMP
+);
+```
+
+### ChatRoom 테이블 (채팅방)
+
+```sql
+CREATE TABLE chat_rooms (
+    id SERIAL PRIMARY KEY,
+    user1_id BIGINT NOT NULL,
+    user2_id BIGINT NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP,
+    last_message_at TIMESTAMP
+);
+```
+
+### Message 테이블 (채팅 메시지)
+
+```sql
+CREATE TABLE messages (
+    id SERIAL PRIMARY KEY,
+    room_id INTEGER REFERENCES chat_rooms(id),
+    sender_id BIGINT NOT NULL,
+    content TEXT,
+    message_type VARCHAR(20),            -- text/image
+    image_url VARCHAR(500),              -- S3 URL
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP
+);
+```
+
+### SuccessStory 테이블 (성혼 후기)
+
+```sql
+CREATE TABLE success_stories (
+    id SERIAL PRIMARY KEY,
+    user1_id BIGINT REFERENCES users(user_id),
+    user2_id BIGINT REFERENCES users(user_id),
+    title VARCHAR(200),
+    content TEXT,
+    photo_url VARCHAR(500),
+    is_public BOOLEAN DEFAULT FALSE,
+    display_names VARCHAR(100),
+    status VARCHAR(20),                  -- draft/pending/approved/rejected
+    admin_note TEXT,
+    created_at TIMESTAMP,
+    approved_at TIMESTAMP
+);
+```
+
+### Referral 테이블 (추천인)
+
+```sql
+CREATE TABLE referrals (
+    id SERIAL PRIMARY KEY,
+    referrer_id BIGINT REFERENCES users(user_id),
+    referee_id BIGINT REFERENCES users(user_id),
+    referral_code VARCHAR(20),
+    reward_status VARCHAR(20),           -- pending/eligible/rewarded
+    reward_type VARCHAR(50),
+    created_at TIMESTAMP,
+    rewarded_at TIMESTAMP
+);
+```
+
 ## Infrastructure
 
 ### AWS Resources
@@ -320,10 +525,12 @@ CREATE TABLE date_courses (
 
 ```yaml
 services:
-  login-service:  8000:8000
-  user-service:   8001:8001
-  pay-service:    8002:8002
-  place-service:  8003:8003
+  login-service:        8000:8000
+  user-service:         8001:8001
+  pay-service:          8002:8002
+  place-service:        8003:8003
+  notification-service: 8004:8004
+  chat-service:         8005:8005
 ```
 
 ## Security
@@ -384,6 +591,30 @@ NAVER_CLIENT_ID=         # 네이버 Client ID
 NAVER_CLIENT_SECRET=     # 네이버 Client Secret
 ```
 
+### notification-service
+```env
+DB_USER=                 # PostgreSQL 사용자
+DB_PASSWORD=             # PostgreSQL 비밀번호
+DB_HOST=                 # PostgreSQL 호스트
+DB_PORT=5432             # PostgreSQL 포트
+DB_NAME=                 # 데이터베이스 이름
+FIREBASE_CREDENTIALS_JSON= # Base64 인코딩된 Firebase 서비스 계정
+```
+
+### chat-service
+```env
+DB_USER=                 # PostgreSQL 사용자
+DB_PASSWORD=             # PostgreSQL 비밀번호
+DB_HOST=                 # PostgreSQL 호스트
+DB_PORT=5432             # PostgreSQL 포트
+DB_NAME=                 # 데이터베이스 이름
+AWS_ACCESS_KEY_ID=       # AWS 액세스 키
+AWS_SECRET_ACCESS_KEY=   # AWS 시크릿 키
+AWS_REGION=              # AWS 리전
+S3_BUCKET_NAME=          # S3 버킷 이름
+NOTIFICATION_SERVICE_URL= # 알림 서비스 URL
+```
+
 ## Scaling Strategy
 
 ### 현재 (DAU ~100)
@@ -415,3 +646,5 @@ docker-compose logs -f
 - user-service: http://localhost:8001/docs
 - pay-service: http://localhost:8002/docs
 - place-service: http://localhost:8003/docs
+- notification-service: http://localhost:8004/docs
+- chat-service: http://localhost:8005/docs
