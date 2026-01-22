@@ -1,0 +1,290 @@
+# .ai-context.yaml
+# AI 어시스턴트가 프로젝트를 이해하기 위한 메타데이터
+# tok_mcp 기반 아키텍처 컨텍스트 파일
+
+project:
+  name: abtsscm_backend
+  description: 결혼 매칭 서비스 마이크로서비스 백엔드
+  type: microservices
+  language: python
+  version: "1.0.0"
+  domain: www.abysscm.com
+  admin_domain: admin.abysscm.com
+
+architecture:
+  pattern: microservices
+  container: docker-compose
+
+  services:
+    - name: login-service
+      port: 8000
+      responsibility: "인증 및 세션 관리 (일반 회원 + 관리자)"
+      entrypoint: login-service/main.py
+      dependencies:
+        - user-service
+      features:
+        - 카카오 OAuth 로그인
+        - JWT 토큰 발급
+        - 관리자 인증 (허용된 카카오 계정만)
+
+    - name: user-service
+      port: 8001
+      responsibility: "회원 정보 CRUD, 매칭 관리, 관리자 기능"
+      entrypoint: user-service/main.py
+      database: PostgreSQL
+      external_services:
+        - AWS S3
+      features:
+        - 회원 CRUD
+        - 매칭 관리
+        - 회원 필터링 검색
+        - 회원 탈퇴/추방
+        - 통계 대시보드
+
+    - name: pay-service
+      port: 8002
+      responsibility: "결제 처리 (토스페이먼츠)"
+      entrypoint: pay-service/main.py
+      dependencies:
+        - user-service
+      external_services:
+        - Toss Payments API
+      features:
+        - 결제 준비/승인
+        - 결제 내역 조회
+        - 회원 등급 업데이트
+
+technology_stack:
+  framework: FastAPI
+  runtime: Python 3.11
+  orm: SQLAlchemy
+  database: PostgreSQL (AWS RDS)
+  container: Docker Compose
+  cloud: AWS
+  payment: Toss Payments
+
+key_files:
+  database:
+    - path: user-service/db.py
+      description: "DB 연결 설정 및 SQLAlchemy 모델 정의"
+
+  authentication:
+    - path: login-service/main.py
+      description: "카카오 OAuth 로그인 처리 (일반/관리자)"
+    - path: login-service/jwt_utils.py
+      description: "JWT 생성 및 검증 유틸리티"
+
+  user_management:
+    - path: user-service/main.py
+      description: "회원 CRUD, 매칭, 관리자 API"
+
+  payment:
+    - path: pay-service/main.py
+      description: "토스페이먼츠 결제 처리"
+
+  configuration:
+    - path: docker-compose.yml
+      description: "서비스 오케스트레이션 설정"
+
+data_models:
+  User:
+    table: users
+    primary_key: user_id (카카오 ID)
+    fields:
+      - name: String(50) - 이름
+      - email: String(100) - 이메일
+      - phone_number: String(20) - 전화번호
+      - age: String(3) - 나이
+      - gender: String(2) - 성별 (남/여)
+      - birth_date: String(30) - 생년월일 문자열
+      - matching_count: Integer - 매칭 횟수
+      - status: String(10) - 상태 (매칭전/매칭중/성혼/만료)
+      - first_consultation: DateTime - 최초 상담일
+      - last_consultation: DateTime - 마지막 상담일
+      - consultation_count: Integer - 상담 횟수
+      - matched_partner: BigInteger - 매칭된 상대 ID
+      - membership_type: String(10) - 회원 등급 (일반회원/정회원/결제회원)
+      - payment_date: DateTime - 결제일
+      - is_banned: Boolean - 추방 여부
+      - banned_at: DateTime - 추방일
+      - deleted_at: DateTime - 탈퇴일 (소프트 삭제)
+
+  Admin:
+    table: admins
+    primary_key: admin_id
+    fields:
+      - kakao_id: BigInteger - 허용된 카카오 ID
+      - name: String(50) - 관리자 이름
+      - role: String(20) - 역할 (super_admin/admin)
+      - created_at: DateTime - 생성일
+
+api_endpoints:
+  login-service:
+    public:
+      - method: POST
+        path: /login/kakao
+        description: "카카오 인증 코드로 로그인"
+      - method: POST
+        path: /submit
+        description: "회원가입 정보 제출"
+    admin:
+      - method: POST
+        path: /admin/login/kakao
+        description: "관리자 카카오 로그인 (허용된 계정만)"
+      - method: GET
+        path: /admin/verify
+        description: "관리자 JWT 토큰 검증"
+
+  user-service:
+    public:
+      - method: POST
+        path: /users/login-or-register
+        description: "로그인 또는 등록 확인"
+      - method: POST
+        path: /users/add
+        description: "새 회원 추가"
+      - method: GET
+        path: /users/{kakao_id}
+        description: "회원 정보 조회"
+      - method: PATCH
+        path: /users/{user_id}/membership
+        description: "회원 등급 업데이트"
+    admin:
+      - method: GET
+        path: /admin/users
+        description: "전체 회원 목록"
+      - method: GET
+        path: /admin/users/search
+        description: "회원 필터링 조회"
+        params:
+          - status: 매칭전/매칭중/성혼/만료
+          - membership_type: 일반회원/정회원/결제회원
+          - gender: 남/여
+          - has_payment: true/false
+          - is_matched: true/false
+      - method: GET
+        path: /admin/users/{user_id}
+        description: "회원 상세 조회"
+      - method: PUT
+        path: /admin/users/memo/{user_id}
+        description: "회원 메모 저장 (S3)"
+      - method: GET
+        path: /admin/users/memo/{user_id}
+        description: "회원 메모 조회 (S3)"
+      - method: POST
+        path: /admin/users/match/{user_id}/{partner_id}
+        description: "회원 매칭 처리"
+      - method: DELETE
+        path: /admin/users/match/{user_id}
+        description: "매칭 해제"
+      - method: GET
+        path: /admin/users/candidates/{user_id}
+        description: "매칭 후보자 목록 조회 (이성, 매칭전 상태)"
+      - method: DELETE
+        path: /admin/users/{user_id}
+        description: "회원 탈퇴 처리 (소프트 삭제)"
+      - method: POST
+        path: /admin/users/{user_id}/ban
+        description: "회원 추방 (블랙리스트)"
+      - method: GET
+        path: /admin/stats
+        description: "통계 대시보드"
+
+  pay-service:
+    public:
+      - method: POST
+        path: /payments/ready
+        description: "결제 준비 (토스페이먼츠)"
+      - method: POST
+        path: /payments/confirm
+        description: "결제 승인"
+      - method: GET
+        path: /payments/{payment_key}
+        description: "결제 내역 조회"
+      - method: GET
+        path: /health
+        description: "헬스체크"
+
+external_integrations:
+  kakao_oauth:
+    type: OAuth 2.0
+    endpoints:
+      token: https://kauth.kakao.com/oauth/token
+      user_info: https://kapi.kakao.com/v2/user/me
+
+  toss_payments:
+    type: Payment Gateway
+    base_url: https://api.tosspayments.com
+    version: v1
+    auth: Basic (secret_key base64)
+    endpoints:
+      payments: /v1/payments
+      confirm: /v1/payments/confirm
+
+  aws_s3:
+    type: Object Storage
+    usage: 사용자 메모 JSON 저장
+    path_pattern: "user_updates/{user_id}.json"
+
+environment_variables:
+  login-service:
+    required:
+      - KAKAO_REST_API_KEY
+      - KAKAO_CLIENT_SECRET
+      - KAKAO_REDIRECT_URI
+      - USER_SERVICE_URL
+      - JWT_SECRET
+    optional:
+      - ADMIN_KAKAO_IDS  # 쉼표로 구분된 허용 관리자 카카오 ID 목록
+
+  user-service:
+    required:
+      - DB_USER
+      - DB_PASSWORD
+      - DB_HOST
+      - DB_NAME
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_REGION
+      - S3_BUCKET_NAME
+    optional:
+      - DB_PORT  # default: 5432
+
+  pay-service:
+    required:
+      - TOSS_CLIENT_KEY
+      - TOSS_SECRET_KEY
+      - USER_SERVICE_URL
+    optional: []
+
+constraints:
+  scale: "DAU ~100 (MVP)"
+  budget: "$50/월 이하"
+  infrastructure: "AWS 유지"
+
+conventions:
+  coding:
+    - "FastAPI 라우터 패턴 사용"
+    - "Pydantic 모델로 요청/응답 검증"
+    - "환경변수로 설정 관리"
+    - "async/await 비동기 처리"
+  naming:
+    - "파일명: snake_case"
+    - "클래스명: PascalCase"
+    - "함수명: snake_case"
+    - "상수명: UPPER_SNAKE_CASE"
+  api:
+    - "RESTful 엔드포인트"
+    - "JSON 응답 형식"
+    - "관리자 API는 /admin 프리픽스"
+  security:
+    - "관리자 API는 JWT 검증 필수"
+    - "민감 정보는 환경변수로 관리"
+    - "CORS 허용 도메인 제한"
+
+dev_commands:
+  build: "docker-compose build"
+  run: "docker-compose up"
+  run_detached: "docker-compose up -d"
+  logs: "docker-compose logs -f"
+  stop: "docker-compose down"
