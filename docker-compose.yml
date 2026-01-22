@@ -31,3 +31,9 @@ services:
     build: ./pay-service
     ports:
       - "8002:8002"
+    environment:
+      - TOSS_CLIENT_KEY=${TOSS_CLIENT_KEY}
+      - TOSS_SECRET_KEY=${TOSS_SECRET_KEY}
+      - USER_SERVICE_URL=http://user-service:8001
+    depends_on:
+      - user-service

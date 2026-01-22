@@ -269,3 +269,50 @@ def match_partner(
         "matched_partner": user.matched_partner,
         "matching_count": user.matching_count
     }
+
+
+# ===== 멤버십 업데이트 API (pay-service에서 호출) =====
+
+class MembershipUpdateRequest(BaseModel):
+    membership_type: str
+    payment_date: str
+
+
+@app.patch("/users/{user_id}/membership")
+def update_membership(user_id: int, req: MembershipUpdateRequest, db: Session = Depends(get_db)):
+    """결제 완료 후 회원 등급 업데이트"""
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자 없음")
+
+    # 멤버십 타입 검증
+    valid_types = ["일반회원", "정회원", "결제회원"]
+    if req.membership_type not in valid_types:
+        raise HTTPException(status_code=400, detail=f"유효하지 않은 멤버십 타입: {req.membership_type}")
+
+    user.membership_type = req.membership_type
+
+    # 결제일 파싱
+    try:
+        if req.payment_date:
+            # ISO 형식 파싱 (토스페이먼츠에서 오는 형식)
+            payment_date = req.payment_date.replace("Z", "+00:00")
+            user.payment_date = datetime.fromisoformat(payment_date)
+    except ValueError:
+        user.payment_date = datetime.now()
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "membership_type": user.membership_type,
+        "payment_date": str(user.payment_date) if user.payment_date else None
+    }
+
+
+@app.get("/health")
+def health_check():
+    """헬스체크"""
+    return {"status": "ok", "service": "user-service"}
