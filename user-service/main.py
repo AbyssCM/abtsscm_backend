@@ -2,7 +2,14 @@
 from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from db import SessionLocal, engine, User, Consultation, Meeting, MeetingReview
+from db import (
+    SessionLocal, engine, User, Consultation, Meeting, MeetingReview,
+    UserProfile, UserPhoto, MatchScore, MatchHistory, SuccessStory, Referral
+)
+from fastapi import UploadFile, File, Query
+import random
+import string
+import uuid
 from datetime import datetime, date
 from typing import Optional
 import os
@@ -1137,4 +1144,736 @@ def get_meeting_stats(db: Session = Depends(get_db)):
         "cancelled_meetings": cancelled_meetings,
         "total_reviews": total_reviews,
         "intent_counts": intent_counts
+    }
+
+
+# ===== 프로필 API (Phase 6-2) =====
+
+class ProfileUpdateRequest(BaseModel):
+    height: Optional[int] = None
+    job: Optional[str] = None
+    company: Optional[str] = None
+    education: Optional[str] = None
+    religion: Optional[str] = None
+    smoking: Optional[str] = None
+    drinking: Optional[str] = None
+    location: Optional[str] = None
+    mbti: Optional[str] = None
+    hobbies: Optional[str] = None
+    introduction: Optional[str] = None
+    ideal_age_min: Optional[int] = None
+    ideal_age_max: Optional[int] = None
+    ideal_height_min: Optional[int] = None
+    ideal_height_max: Optional[int] = None
+    ideal_location: Optional[str] = None
+    ideal_religion: Optional[str] = None
+    ideal_smoking: Optional[str] = None
+
+
+@app.get("/profile/my")
+def get_my_profile(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """내 프로필 조회"""
+    profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+
+    if not profile:
+        return {"user_id": user_id, "profile": None, "message": "프로필이 없습니다"}
+
+    photos = db.query(UserPhoto).filter(
+        UserPhoto.user_id == user_id,
+        UserPhoto.is_approved == True
+    ).order_by(UserPhoto.order_index).all()
+
+    return {
+        "user_id": user_id,
+        "profile": {
+            "height": profile.height,
+            "job": profile.job,
+            "company": profile.company,
+            "education": profile.education,
+            "religion": profile.religion,
+            "smoking": profile.smoking,
+            "drinking": profile.drinking,
+            "location": profile.location,
+            "mbti": profile.mbti,
+            "hobbies": profile.hobbies,
+            "introduction": profile.introduction,
+            "ideal_age_min": profile.ideal_age_min,
+            "ideal_age_max": profile.ideal_age_max,
+            "ideal_height_min": profile.ideal_height_min,
+            "ideal_height_max": profile.ideal_height_max,
+            "ideal_location": profile.ideal_location,
+            "ideal_religion": profile.ideal_religion,
+            "ideal_smoking": profile.ideal_smoking
+        },
+        "photos": [
+            {
+                "id": p.id,
+                "photo_url": p.photo_url,
+                "photo_type": p.photo_type,
+                "order_index": p.order_index
+            }
+            for p in photos
+        ]
+    }
+
+
+@app.put("/profile/my")
+def update_my_profile(user_id: int = Query(...), req: ProfileUpdateRequest = None, db: Session = Depends(get_db)):
+    """프로필 수정"""
+    profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+
+    if not profile:
+        profile = UserProfile(user_id=user_id, created_at=datetime.now())
+        db.add(profile)
+
+    # 프로필 업데이트
+    for field, value in req.dict(exclude_unset=True).items():
+        if value is not None:
+            setattr(profile, field, value)
+
+    profile.updated_at = datetime.now()
+    db.commit()
+    db.refresh(profile)
+
+    return {"status": "success", "message": "프로필이 업데이트되었습니다"}
+
+
+@app.post("/profile/photos")
+async def upload_profile_photo(
+    user_id: int = Query(...),
+    photo_type: str = Query("profile"),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """프로필 사진 업로드"""
+    # 파일 확장자 확인
+    allowed_extensions = [".jpg", ".jpeg", ".png", ".gif"]
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in allowed_extensions:
+        raise HTTPException(status_code=400, detail="허용되지 않는 파일 형식입니다")
+
+    # 파일 이름 생성
+    photo_id = str(uuid.uuid4())
+    file_key = f"user_photos/{user_id}/{photo_id}{file_ext}"
+
+    try:
+        # S3 업로드
+        contents = await file.read()
+        s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=file_key,
+            Body=contents,
+            ContentType=file.content_type
+        )
+
+        # S3 URL 생성
+        photo_url = f"https://{S3_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{file_key}"
+
+        # 현재 사진 순서
+        max_order = db.query(UserPhoto).filter(
+            UserPhoto.user_id == user_id
+        ).count()
+
+        # DB 저장
+        photo = UserPhoto(
+            user_id=user_id,
+            photo_url=photo_url,
+            photo_type=photo_type,
+            order_index=max_order,
+            is_approved=False,
+            created_at=datetime.now()
+        )
+        db.add(photo)
+        db.commit()
+        db.refresh(photo)
+
+        return {
+            "status": "success",
+            "photo": {
+                "id": photo.id,
+                "photo_url": photo.photo_url,
+                "is_approved": photo.is_approved
+            }
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"업로드 실패: {str(e)}")
+
+
+@app.delete("/profile/photos/{photo_id}")
+def delete_profile_photo(photo_id: int, db: Session = Depends(get_db)):
+    """프로필 사진 삭제"""
+    photo = db.query(UserPhoto).filter(UserPhoto.id == photo_id).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="사진을 찾을 수 없습니다")
+
+    # S3에서 삭제
+    try:
+        file_key = photo.photo_url.split(f"{S3_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/")[1]
+        s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=file_key)
+    except Exception:
+        pass
+
+    db.delete(photo)
+    db.commit()
+
+    return {"status": "success", "message": "사진이 삭제되었습니다"}
+
+
+@app.put("/profile/photos/{photo_id}/order")
+def update_photo_order(photo_id: int, order_index: int = Query(...), db: Session = Depends(get_db)):
+    """사진 순서 변경"""
+    photo = db.query(UserPhoto).filter(UserPhoto.id == photo_id).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="사진을 찾을 수 없습니다")
+
+    photo.order_index = order_index
+    db.commit()
+
+    return {"status": "success", "message": "순서가 변경되었습니다"}
+
+
+@app.get("/admin/photos/pending")
+def get_pending_photos(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
+    """승인 대기 사진 목록"""
+    query = db.query(UserPhoto).filter(UserPhoto.is_approved == False)
+    total = query.count()
+    photos = query.offset(skip).limit(limit).all()
+
+    return {
+        "total": total,
+        "photos": [
+            {
+                "id": p.id,
+                "user_id": p.user_id,
+                "photo_url": p.photo_url,
+                "photo_type": p.photo_type,
+                "created_at": str(p.created_at) if p.created_at else None
+            }
+            for p in photos
+        ]
+    }
+
+
+@app.put("/admin/photos/{photo_id}/approve")
+def approve_photo(photo_id: int, db: Session = Depends(get_db)):
+    """사진 승인"""
+    photo = db.query(UserPhoto).filter(UserPhoto.id == photo_id).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="사진을 찾을 수 없습니다")
+
+    photo.is_approved = True
+    db.commit()
+
+    return {"status": "success", "message": "사진이 승인되었습니다"}
+
+
+@app.put("/admin/photos/{photo_id}/reject")
+def reject_photo(photo_id: int, reason: str = Query("부적절한 사진"), db: Session = Depends(get_db)):
+    """사진 거부"""
+    photo = db.query(UserPhoto).filter(UserPhoto.id == photo_id).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="사진을 찾을 수 없습니다")
+
+    photo.rejected_reason = reason
+    db.delete(photo)
+    db.commit()
+
+    return {"status": "success", "message": "사진이 거부되었습니다"}
+
+
+# ===== 매칭 추천 API (Phase 6-4) =====
+
+def calculate_match_score(user_profile, candidate_profile, candidate_user):
+    """매칭 점수 계산"""
+    score = 0
+    breakdown = {}
+
+    if not user_profile or not candidate_profile:
+        return 50, {"base": 50}
+
+    # 1. 이상형 나이 조건 (15점)
+    try:
+        candidate_age = int(candidate_user.age) if candidate_user.age else 0
+        if user_profile.ideal_age_min and user_profile.ideal_age_max:
+            if user_profile.ideal_age_min <= candidate_age <= user_profile.ideal_age_max:
+                score += 15
+                breakdown["age"] = 15
+    except:
+        pass
+
+    # 2. 이상형 키 조건 (15점)
+    if candidate_profile.height and user_profile.ideal_height_min and user_profile.ideal_height_max:
+        if user_profile.ideal_height_min <= candidate_profile.height <= user_profile.ideal_height_max:
+            score += 15
+            breakdown["height"] = 15
+
+    # 3. 지역 조건 (10점)
+    if user_profile.ideal_location and candidate_profile.location:
+        if user_profile.ideal_location in candidate_profile.location:
+            score += 10
+            breakdown["location"] = 10
+
+    # 4. 종교 조건 (10점)
+    if user_profile.ideal_religion and candidate_profile.religion:
+        if user_profile.ideal_religion == candidate_profile.religion or user_profile.ideal_religion == "상관없음":
+            score += 10
+            breakdown["religion"] = 10
+
+    # 5. 흡연 조건 (10점)
+    if user_profile.ideal_smoking and candidate_profile.smoking:
+        if user_profile.ideal_smoking == candidate_profile.smoking or user_profile.ideal_smoking == "상관없음":
+            score += 10
+            breakdown["smoking"] = 10
+
+    # 6. 프로필 완성도 (20점)
+    profile_fields = [candidate_profile.job, candidate_profile.education, candidate_profile.introduction]
+    filled = sum(1 for f in profile_fields if f)
+    completeness = (filled / len(profile_fields)) * 20
+    score += completeness
+    breakdown["completeness"] = completeness
+
+    # 7. 기본 점수 (20점)
+    score += 20
+    breakdown["base"] = 20
+
+    return min(score, 100), breakdown
+
+
+@app.get("/recommendations")
+def get_recommendations(user_id: int = Query(...), limit: int = 10, db: Session = Depends(get_db)):
+    """내 추천 목록"""
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자 없음")
+
+    user_profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+
+    # 이성, 매칭전, 활성 사용자 조회
+    opposite_gender = "여" if user.gender == "남" else "남"
+    candidates = db.query(User).filter(
+        User.gender == opposite_gender,
+        User.status == "매칭전",
+        User.is_banned == False,
+        User.deleted_at == None,
+        User.user_id != user_id
+    ).all()
+
+    # 점수 계산
+    scored_candidates = []
+    for candidate in candidates:
+        candidate_profile = db.query(UserProfile).filter(UserProfile.user_id == candidate.user_id).first()
+        score, breakdown = calculate_match_score(user_profile, candidate_profile, candidate)
+        scored_candidates.append({
+            "user": candidate,
+            "profile": candidate_profile,
+            "score": score,
+            "breakdown": breakdown
+        })
+
+    # 점수순 정렬
+    scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    return {
+        "total": len(scored_candidates[:limit]),
+        "recommendations": [
+            {
+                "user_id": c["user"].user_id,
+                "name": c["user"].name,
+                "age": c["user"].age,
+                "score": round(c["score"], 1),
+                "profile": {
+                    "job": c["profile"].job if c["profile"] else None,
+                    "location": c["profile"].location if c["profile"] else None,
+                    "introduction": c["profile"].introduction[:100] if c["profile"] and c["profile"].introduction else None
+                } if c["profile"] else None
+            }
+            for c in scored_candidates[:limit]
+        ]
+    }
+
+
+@app.get("/admin/recommendations/{user_id}")
+def get_user_recommendations(user_id: int, limit: int = 20, db: Session = Depends(get_db)):
+    """특정 회원 추천 목록 (관리자)"""
+    return get_recommendations(user_id=user_id, limit=limit, db=db)
+
+
+# ===== 성혼 후기 API (Phase 6-5) =====
+
+class SuccessStoryCreateRequest(BaseModel):
+    user1_id: int
+    user2_id: int
+    title: str
+    content: Optional[str] = None
+    display_names: Optional[str] = None
+
+
+@app.post("/success-stories")
+def create_success_story(req: SuccessStoryCreateRequest, db: Session = Depends(get_db)):
+    """성혼 후기 작성"""
+    story = SuccessStory(
+        user1_id=req.user1_id,
+        user2_id=req.user2_id,
+        title=req.title,
+        content=req.content,
+        display_names=req.display_names,
+        status="pending",
+        is_public=False,
+        created_at=datetime.now()
+    )
+
+    db.add(story)
+    db.commit()
+    db.refresh(story)
+
+    return {
+        "status": "success",
+        "story_id": story.id,
+        "message": "후기가 등록되었습니다. 관리자 승인 후 공개됩니다."
+    }
+
+
+@app.get("/success-stories/public")
+def get_public_success_stories(skip: int = 0, limit: int = 10, db: Session = Depends(get_db)):
+    """공개 후기 목록 (랜딩페이지용)"""
+    stories = db.query(SuccessStory).filter(
+        SuccessStory.status == "approved",
+        SuccessStory.is_public == True
+    ).order_by(SuccessStory.approved_at.desc()).offset(skip).limit(limit).all()
+
+    return {
+        "total": len(stories),
+        "stories": [
+            {
+                "id": s.id,
+                "title": s.title,
+                "content": s.content,
+                "display_names": s.display_names,
+                "photo_url": s.photo_url,
+                "approved_at": str(s.approved_at) if s.approved_at else None
+            }
+            for s in stories
+        ]
+    }
+
+
+@app.get("/admin/success-stories")
+def get_all_success_stories(status: str = None, skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
+    """전체 후기 목록 (관리자)"""
+    query = db.query(SuccessStory)
+    if status:
+        query = query.filter(SuccessStory.status == status)
+
+    total = query.count()
+    stories = query.order_by(SuccessStory.created_at.desc()).offset(skip).limit(limit).all()
+
+    return {
+        "total": total,
+        "stories": [
+            {
+                "id": s.id,
+                "user1_id": s.user1_id,
+                "user2_id": s.user2_id,
+                "title": s.title,
+                "content": s.content,
+                "status": s.status,
+                "is_public": s.is_public,
+                "created_at": str(s.created_at) if s.created_at else None
+            }
+            for s in stories
+        ]
+    }
+
+
+@app.put("/admin/success-stories/{story_id}/approve")
+def approve_success_story(story_id: int, is_public: bool = True, db: Session = Depends(get_db)):
+    """후기 승인"""
+    story = db.query(SuccessStory).filter(SuccessStory.id == story_id).first()
+    if not story:
+        raise HTTPException(status_code=404, detail="후기를 찾을 수 없습니다")
+
+    story.status = "approved"
+    story.is_public = is_public
+    story.approved_at = datetime.now()
+    db.commit()
+
+    return {"status": "success", "message": "후기가 승인되었습니다"}
+
+
+@app.put("/admin/success-stories/{story_id}/reject")
+def reject_success_story(story_id: int, note: str = None, db: Session = Depends(get_db)):
+    """후기 거부"""
+    story = db.query(SuccessStory).filter(SuccessStory.id == story_id).first()
+    if not story:
+        raise HTTPException(status_code=404, detail="후기를 찾을 수 없습니다")
+
+    story.status = "rejected"
+    story.admin_note = note
+    db.commit()
+
+    return {"status": "success", "message": "후기가 거부되었습니다"}
+
+
+# ===== 추천인 API (Phase 6-6) =====
+
+def generate_referral_code():
+    """추천 코드 생성"""
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(random.choices(chars, k=6))
+
+
+@app.get("/referral/my-code")
+def get_my_referral_code(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """내 추천 코드 조회 (없으면 생성)"""
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자 없음")
+
+    if not user.referral_code:
+        # 코드 생성
+        while True:
+            code = generate_referral_code()
+            existing = db.query(User).filter(User.referral_code == code).first()
+            if not existing:
+                user.referral_code = code
+                db.commit()
+                break
+
+    return {
+        "user_id": user_id,
+        "referral_code": user.referral_code
+    }
+
+
+@app.post("/referral/apply")
+def apply_referral_code(user_id: int = Query(...), code: str = Query(...), db: Session = Depends(get_db)):
+    """추천 코드 적용"""
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자 없음")
+
+    if user.referred_by:
+        raise HTTPException(status_code=400, detail="이미 추천 코드를 적용했습니다")
+
+    # 추천인 찾기
+    referrer = db.query(User).filter(User.referral_code == code).first()
+    if not referrer:
+        raise HTTPException(status_code=404, detail="유효하지 않은 추천 코드입니다")
+
+    if referrer.user_id == user_id:
+        raise HTTPException(status_code=400, detail="본인의 추천 코드는 사용할 수 없습니다")
+
+    # 추천 관계 저장
+    user.referred_by = referrer.user_id
+
+    referral = Referral(
+        referrer_id=referrer.user_id,
+        referee_id=user_id,
+        referral_code=code,
+        reward_status="pending",
+        created_at=datetime.now()
+    )
+    db.add(referral)
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "추천 코드가 적용되었습니다",
+        "referrer_id": referrer.user_id
+    }
+
+
+@app.get("/referral/my-referrals")
+def get_my_referrals(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """내가 추천한 사람 목록"""
+    referrals = db.query(Referral).filter(Referral.referrer_id == user_id).all()
+
+    return {
+        "total": len(referrals),
+        "referrals": [
+            {
+                "id": r.id,
+                "referee_id": r.referee_id,
+                "reward_status": r.reward_status,
+                "created_at": str(r.created_at) if r.created_at else None
+            }
+            for r in referrals
+        ]
+    }
+
+
+@app.get("/admin/referrals")
+def get_all_referrals(status: str = None, skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
+    """전체 추천 현황 (관리자)"""
+    query = db.query(Referral)
+    if status:
+        query = query.filter(Referral.reward_status == status)
+
+    total = query.count()
+    referrals = query.order_by(Referral.created_at.desc()).offset(skip).limit(limit).all()
+
+    return {
+        "total": total,
+        "referrals": [
+            {
+                "id": r.id,
+                "referrer_id": r.referrer_id,
+                "referee_id": r.referee_id,
+                "referral_code": r.referral_code,
+                "reward_status": r.reward_status,
+                "reward_type": r.reward_type,
+                "created_at": str(r.created_at) if r.created_at else None
+            }
+            for r in referrals
+        ]
+    }
+
+
+@app.put("/admin/referrals/{referral_id}/reward")
+def reward_referral(referral_id: int, reward_type: str = Query("discount"), db: Session = Depends(get_db)):
+    """보상 지급 처리"""
+    referral = db.query(Referral).filter(Referral.id == referral_id).first()
+    if not referral:
+        raise HTTPException(status_code=404, detail="추천 기록을 찾을 수 없습니다")
+
+    referral.reward_status = "rewarded"
+    referral.reward_type = reward_type
+    referral.rewarded_at = datetime.now()
+    db.commit()
+
+    return {"status": "success", "message": "보상이 지급되었습니다"}
+
+
+# ===== 관리자 대시보드 고도화 API (Phase 6-7) =====
+
+@app.get("/admin/dashboard")
+def get_admin_dashboard(db: Session = Depends(get_db)):
+    """종합 대시보드"""
+    # 기본 통계
+    total_users = db.query(User).filter(User.deleted_at == None).count()
+    active_users = db.query(User).filter(
+        User.deleted_at == None,
+        User.is_banned == False
+    ).count()
+
+    # 이번 달 신규 가입
+    today = datetime.now()
+    first_of_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    new_users_this_month = db.query(User).filter(
+        User.created_at >= first_of_month
+    ).count()
+
+    # 매칭 통계
+    total_matches = db.query(User).filter(User.matched_partner != None).count() // 2
+    success_matches = db.query(User).filter(User.status == "성혼").count() // 2
+
+    # 대기 항목
+    pending_photos = db.query(UserPhoto).filter(UserPhoto.is_approved == False).count()
+    pending_consultations = db.query(Consultation).filter(Consultation.status == "요청됨").count()
+    pending_stories = db.query(SuccessStory).filter(SuccessStory.status == "pending").count()
+
+    return {
+        "overview": {
+            "total_users": total_users,
+            "active_users": active_users,
+            "new_users_this_month": new_users_this_month,
+            "total_matches": total_matches,
+            "success_matches": success_matches
+        },
+        "alerts": {
+            "pending_photos": pending_photos,
+            "pending_consultations": pending_consultations,
+            "pending_stories": pending_stories
+        }
+    }
+
+
+@app.get("/admin/analytics/users")
+def get_user_analytics(db: Session = Depends(get_db)):
+    """사용자 분석"""
+    # 성별 분포
+    gender_counts = {}
+    for gender in ["남", "여"]:
+        count = db.query(User).filter(User.gender == gender, User.deleted_at == None).count()
+        gender_counts[gender] = count
+
+    # 멤버십 분포
+    membership_counts = {}
+    for membership in ["일반회원", "정회원", "결제회원"]:
+        count = db.query(User).filter(User.membership_type == membership, User.deleted_at == None).count()
+        membership_counts[membership] = count
+
+    # 상태 분포
+    status_counts = {}
+    for status in ["매칭전", "매칭중", "성혼", "만료"]:
+        count = db.query(User).filter(User.status == status, User.deleted_at == None).count()
+        status_counts[status] = count
+
+    return {
+        "gender_distribution": gender_counts,
+        "membership_distribution": membership_counts,
+        "status_distribution": status_counts
+    }
+
+
+@app.get("/admin/analytics/matches")
+def get_match_analytics(db: Session = Depends(get_db)):
+    """매칭 분석"""
+    total_users = db.query(User).filter(User.deleted_at == None).count()
+    matched_users = db.query(User).filter(User.matched_partner != None, User.deleted_at == None).count()
+    success_users = db.query(User).filter(User.status == "성혼").count()
+
+    match_rate = (matched_users / total_users * 100) if total_users > 0 else 0
+    success_rate = (success_users / matched_users * 100) if matched_users > 0 else 0
+
+    return {
+        "total_users": total_users,
+        "matched_users": matched_users,
+        "success_users": success_users,
+        "match_rate": round(match_rate, 1),
+        "success_rate": round(success_rate, 1)
+    }
+
+
+@app.get("/admin/analytics/consultations")
+def get_consultation_analytics(db: Session = Depends(get_db)):
+    """상담 분석"""
+    total = db.query(Consultation).count()
+    by_status = {}
+    for status in ["요청됨", "확인됨", "완료됨", "취소됨"]:
+        count = db.query(Consultation).filter(Consultation.status == status).count()
+        by_status[status] = count
+
+    by_type = {}
+    for ctype in ["초기상담", "매칭상담", "사후상담"]:
+        count = db.query(Consultation).filter(Consultation.consultation_type == ctype).count()
+        by_type[ctype] = count
+
+    return {
+        "total": total,
+        "by_status": by_status,
+        "by_type": by_type
+    }
+
+
+@app.get("/admin/reports/summary")
+def get_summary_report(db: Session = Depends(get_db)):
+    """요약 리포트"""
+    # 전체 통계
+    total_users = db.query(User).filter(User.deleted_at == None).count()
+    paid_users = db.query(User).filter(User.payment_date != None, User.deleted_at == None).count()
+    total_consultations = db.query(Consultation).count()
+    total_meetings = db.query(Meeting).count()
+    total_referrals = db.query(Referral).count()
+
+    return {
+        "summary": {
+            "total_users": total_users,
+            "paid_users": paid_users,
+            "payment_rate": round((paid_users / total_users * 100) if total_users > 0 else 0, 1),
+            "total_consultations": total_consultations,
+            "total_meetings": total_meetings,
+            "total_referrals": total_referrals
+        }
     }

@@ -63,6 +63,10 @@ class User(Base):
     deleted_at = Column(DateTime, nullable=True)                 # 탈퇴일 (소프트 삭제)
     created_at = Column(DateTime, nullable=True)                 # 가입일
 
+    # 추천인 관련
+    referral_code = Column(String(20), unique=True, nullable=True)  # 내 추천 코드
+    referred_by = Column(BigInteger, nullable=True)                  # 나를 추천한 사람
+
 
 class Admin(Base):
     """관리자 모델"""
@@ -151,6 +155,130 @@ class MeetingReview(Base):
 
     # 타임스탬프
     created_at = Column(DateTime, nullable=True)
+
+
+class UserProfile(Base):
+    """회원 상세 프로필 모델"""
+    __tablename__ = "user_profiles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id"), unique=True, nullable=False)
+
+    # 기본 정보
+    height = Column(Integer, nullable=True)                      # 키 (cm)
+    job = Column(String(100), nullable=True)                     # 직업
+    company = Column(String(100), nullable=True)                 # 회사/학교
+    education = Column(String(50), nullable=True)                # 학력
+    religion = Column(String(20), nullable=True)                 # 종교
+    smoking = Column(String(20), nullable=True)                  # 흡연 여부
+    drinking = Column(String(20), nullable=True)                 # 음주 여부
+    location = Column(String(100), nullable=True)                # 거주 지역
+
+    # 성격/가치관
+    mbti = Column(String(4), nullable=True)
+    hobbies = Column(Text, nullable=True)                        # JSON 배열
+    introduction = Column(Text, nullable=True)                   # 자기소개
+
+    # 이상형 조건
+    ideal_age_min = Column(Integer, nullable=True)
+    ideal_age_max = Column(Integer, nullable=True)
+    ideal_height_min = Column(Integer, nullable=True)
+    ideal_height_max = Column(Integer, nullable=True)
+    ideal_location = Column(String(100), nullable=True)          # 선호 지역
+    ideal_religion = Column(String(20), nullable=True)
+    ideal_smoking = Column(String(20), nullable=True)
+
+    # 타임스탬프
+    created_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=True)
+
+
+class UserPhoto(Base):
+    """회원 사진 모델"""
+    __tablename__ = "user_photos"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)
+
+    photo_url = Column(String(500), nullable=False)              # S3 URL
+    photo_type = Column(String(20), nullable=True)               # profile/additional
+    order_index = Column(Integer, default=0)                     # 사진 순서
+    is_approved = Column(Boolean, default=False)                 # 관리자 승인 여부
+    rejected_reason = Column(String(200), nullable=True)         # 거부 사유
+
+    # 타임스탬프
+    created_at = Column(DateTime, nullable=True)
+
+
+class MatchScore(Base):
+    """매칭 점수 모델"""
+    __tablename__ = "match_scores"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)
+    candidate_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)
+
+    score = Column(Float, nullable=False)                        # 호환성 점수 (0-100)
+    score_breakdown = Column(Text, nullable=True)                # JSON (항목별 점수)
+
+    calculated_at = Column(DateTime, nullable=True)
+
+
+class MatchHistory(Base):
+    """매칭 히스토리 모델"""
+    __tablename__ = "match_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)
+    partner_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)
+
+    matched_at = Column(DateTime, nullable=True)
+    unmatched_at = Column(DateTime, nullable=True)
+    unmatch_reason = Column(String(100), nullable=True)
+
+
+class SuccessStory(Base):
+    """성혼 후기 모델"""
+    __tablename__ = "success_stories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user1_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)
+    user2_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)
+
+    # 스토리 내용
+    title = Column(String(200), nullable=False)
+    content = Column(Text, nullable=True)
+    photo_url = Column(String(500), nullable=True)               # 커플 사진 (S3)
+
+    # 공개 설정
+    is_public = Column(Boolean, default=False)                   # 웹사이트 공개 여부
+    display_names = Column(String(100), nullable=True)           # 표시 이름 (익명 처리)
+
+    # 관리
+    status = Column(String(20), default="draft")                 # draft/pending/approved/rejected
+    admin_note = Column(Text, nullable=True)
+
+    # 타임스탬프
+    created_at = Column(DateTime, nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+
+
+class Referral(Base):
+    """추천인 모델"""
+    __tablename__ = "referrals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    referrer_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)  # 추천한 사람
+    referee_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)   # 추천받은 사람
+    referral_code = Column(String(20), nullable=False)
+
+    # 보상 상태
+    reward_status = Column(String(20), default="pending")        # pending/eligible/rewarded
+    reward_type = Column(String(50), nullable=True)              # discount/extension
+
+    # 타임스탬프
+    created_at = Column(DateTime, nullable=True)
+    rewarded_at = Column(DateTime, nullable=True)
 
 
 # 테이블 생성 함수
