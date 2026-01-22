@@ -64,3 +64,21 @@ services:
       - DB_PORT=5432
       - DB_NAME=${DB_NAME}
       - FIREBASE_CREDENTIALS_JSON=${FIREBASE_CREDENTIALS_JSON}
+
+  chat-service:
+    build: ./chat-service
+    ports:
+      - "8005:8005"
+    environment:
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8004
+    depends_on:
+      - notification-service
