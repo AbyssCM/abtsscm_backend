@@ -39,3 +39,16 @@ services:
       - USER_SERVICE_URL=http://user-service:8001
     depends_on:
       - user-service
+
+  place-service:
+    build: ./place-service
+    ports:
+      - "8003:8003"
+    environment:
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME}
+      - NAVER_CLIENT_ID=${NAVER_CLIENT_ID}
+      - NAVER_CLIENT_SECRET=${NAVER_CLIENT_SECRET}
