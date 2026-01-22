@@ -25,8 +25,13 @@ app.add_middleware(
 REST_API_KEY = os.getenv("KAKAO_REST_API_KEY")
 CLIENT_SECRET = os.getenv("KAKAO_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("KAKAO_REDIRECT_URI")
+ADMIN_REDIRECT_URI = os.getenv("ADMIN_REDIRECT_URI", os.getenv("KAKAO_REDIRECT_URI"))
 
 USER_SERVICE_URL = os.getenv("USER_SERVICE_URL")
+
+# 허용된 관리자 카카오 ID 목록 (쉼표로 구분)
+ADMIN_KAKAO_IDS = os.getenv("ADMIN_KAKAO_IDS", "").split(",")
+ADMIN_KAKAO_IDS = [id.strip() for id in ADMIN_KAKAO_IDS if id.strip()]
 
 
 class KakaoCodeRequest(BaseModel):
@@ -184,3 +189,122 @@ async def submit_user_data(request: Request, data: SubmitRequest):
     print("User-service 응답:", user_res.json())
 
     return {"status": "success", "jwt_payload": payload, "submitted_data": result, "user_service": user_res.json()}
+
+
+# ===== 관리자 로그인 API =====
+
+class AdminKakaoCodeRequest(BaseModel):
+    code: str
+    redirect_uri: str = None  # 관리자 페이지용 redirect_uri
+
+
+@app.post("/admin/login/kakao")
+async def admin_login_kakao(data: AdminKakaoCodeRequest):
+    """
+    관리자 카카오 로그인
+    - 허용된 카카오 ID만 로그인 가능
+    - ADMIN_KAKAO_IDS 환경변수에 등록된 ID만 접근 가능
+    """
+    print("[관리자 로그인 요청] 카카오 코드:", data.code)
+
+    # redirect_uri 결정 (관리자용 또는 기본값)
+    redirect_uri = data.redirect_uri or ADMIN_REDIRECT_URI
+
+    # 1. 카카오 access token 얻기
+    token_url = "https://kauth.kakao.com/oauth/token"
+    token_data = {
+        "grant_type": "authorization_code",
+        "client_id": REST_API_KEY,
+        "client_secret": CLIENT_SECRET,
+        "redirect_uri": redirect_uri,
+        "code": data.code,
+    }
+    token_res = requests.post(token_url, data=token_data)
+    print("[관리자 카카오 토큰 요청] 상태:", token_res.status_code)
+
+    if token_res.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid authorization code")
+
+    access_token = token_res.json().get("access_token")
+
+    # 2. 카카오에서 사용자 정보 가져오기
+    user_info_res = requests.get(
+        "https://kapi.kakao.com/v2/user/me",
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+
+    if user_info_res.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Kakao token")
+
+    user_info = user_info_res.json()
+    kakao_id = str(user_info.get("id"))
+    kakao_account = user_info.get("kakao_account", {})
+    nickname = kakao_account.get("profile", {}).get("nickname", "관리자")
+
+    print(f"[관리자 로그인] kakao_id: {kakao_id}, nickname: {nickname}")
+    print(f"[허용된 관리자 목록] {ADMIN_KAKAO_IDS}")
+
+    # 3. 관리자 권한 확인
+    if not ADMIN_KAKAO_IDS:
+        raise HTTPException(status_code=403, detail="관리자 목록이 설정되지 않았습니다")
+
+    if kakao_id not in ADMIN_KAKAO_IDS:
+        print(f"[관리자 로그인 거부] {kakao_id}는 허용된 관리자가 아닙니다")
+        raise HTTPException(status_code=403, detail="관리자 권한이 없습니다")
+
+    # 4. 관리자용 JWT 생성 (is_admin 플래그 포함)
+    jwt_token = create_jwt({
+        "kakao_id": kakao_id,
+        "nickname": nickname,
+        "kakaotoken": access_token,
+        "is_admin": True,
+        "role": "admin"
+    })
+
+    print(f"[관리자 로그인 성공] {nickname}")
+
+    return {
+        "jwt": jwt_token,
+        "admin": {
+            "kakao_id": kakao_id,
+            "nickname": nickname,
+            "role": "admin"
+        }
+    }
+
+
+@app.get("/admin/verify")
+async def verify_admin(request: Request):
+    """
+    관리자 JWT 토큰 검증
+    - 프론트엔드에서 관리자 페이지 접근 시 호출
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="JWT 토큰이 필요합니다")
+
+    token = auth_header.split(" ")[1]
+
+    try:
+        payload = decode_jwt(token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+    # 관리자 권한 확인
+    if not payload.get("is_admin"):
+        raise HTTPException(status_code=403, detail="관리자 권한이 없습니다")
+
+    return {
+        "valid": True,
+        "admin": {
+            "kakao_id": payload.get("kakao_id"),
+            "nickname": payload.get("nickname"),
+            "role": payload.get("role", "admin")
+        }
+    }
+
+
+@app.get("/health")
+def health_check():
+    """헬스체크"""
+    return {"status": "ok", "service": "login-service"}

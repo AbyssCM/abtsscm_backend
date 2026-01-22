@@ -316,3 +316,343 @@ def update_membership(user_id: int, req: MembershipUpdateRequest, db: Session = 
 def health_check():
     """헬스체크"""
     return {"status": "ok", "service": "user-service"}
+
+
+# ===== 관리자 전용 API =====
+
+class UserSearchParams(BaseModel):
+    status: str | None = None          # 매칭전, 매칭중, 성혼, 만료
+    membership_type: str | None = None # 일반회원, 정회원, 결제회원
+    gender: str | None = None          # 남, 여
+    has_payment: bool | None = None    # 결제 여부
+    is_matched: bool | None = None     # 매칭 여부
+    is_banned: bool | None = None      # 추방 여부
+    search: str | None = None          # 이름/전화번호 검색
+
+
+@app.get("/admin/users/search")
+def search_users(
+    status: str = None,
+    membership_type: str = None,
+    gender: str = None,
+    has_payment: bool = None,
+    is_matched: bool = None,
+    is_banned: bool = None,
+    search: str = None,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """
+    회원 필터링 검색 API
+    - 상태, 멤버십, 성별, 결제여부, 매칭여부 등으로 필터링
+    - 이름/전화번호 검색 지원
+    """
+    query = db.query(User)
+
+    # 삭제된 회원 제외 (소프트 삭제)
+    query = query.filter(User.deleted_at == None)
+
+    # 필터 적용
+    if status:
+        query = query.filter(User.status == status)
+
+    if membership_type:
+        query = query.filter(User.membership_type == membership_type)
+
+    if gender:
+        query = query.filter(User.gender == gender)
+
+    if has_payment is not None:
+        if has_payment:
+            query = query.filter(User.payment_date != None)
+        else:
+            query = query.filter(User.payment_date == None)
+
+    if is_matched is not None:
+        if is_matched:
+            query = query.filter(User.matched_partner != None)
+        else:
+            query = query.filter(User.matched_partner == None)
+
+    if is_banned is not None:
+        query = query.filter(User.is_banned == is_banned)
+
+    if search:
+        search_pattern = f"%{search}%"
+        query = query.filter(
+            (User.name.like(search_pattern)) |
+            (User.phone_number.like(search_pattern))
+        )
+
+    # 전체 개수
+    total = query.count()
+
+    # 페이징 적용
+    users = query.offset(skip).limit(limit).all()
+
+    return {
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "users": [
+            {
+                "user_id": u.user_id,
+                "name": u.name,
+                "email": u.email,
+                "phone_number": u.phone_number,
+                "age": u.age,
+                "gender": u.gender,
+                "birth_date": u.birth_date,
+                "matching_count": u.matching_count,
+                "status": u.status,
+                "matched_partner": u.matched_partner,
+                "membership_type": u.membership_type,
+                "payment_date": str(u.payment_date) if u.payment_date else None,
+                "is_banned": u.is_banned,
+                "consultation_count": u.consultation_count
+            }
+            for u in users
+        ]
+    }
+
+
+@app.get("/admin/users/{user_id}")
+def get_user_detail(user_id: int, db: Session = Depends(get_db)):
+    """회원 상세 조회 (관리자용)"""
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자 없음")
+
+    return {
+        "user_id": user.user_id,
+        "name": user.name,
+        "email": user.email,
+        "phone_number": user.phone_number,
+        "age": user.age,
+        "gender": user.gender,
+        "birth_date": user.birth_date,
+        "matching_count": user.matching_count,
+        "status": user.status,
+        "matched_partner": user.matched_partner,
+        "first_consultation": str(user.first_consultation) if user.first_consultation else None,
+        "last_consultation": str(user.last_consultation) if user.last_consultation else None,
+        "consultation_count": user.consultation_count,
+        "membership_type": user.membership_type,
+        "payment_date": str(user.payment_date) if user.payment_date else None,
+        "is_banned": user.is_banned,
+        "banned_at": str(user.banned_at) if user.banned_at else None,
+        "ban_reason": user.ban_reason,
+        "deleted_at": str(user.deleted_at) if user.deleted_at else None,
+        "created_at": str(user.created_at) if user.created_at else None
+    }
+
+
+@app.delete("/admin/users/{user_id}")
+def delete_user(user_id: int, db: Session = Depends(get_db)):
+    """
+    회원 탈퇴 처리 (소프트 삭제)
+    - deleted_at에 현재 시간 저장
+    - 실제 데이터는 삭제하지 않음
+    """
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자 없음")
+
+    if user.deleted_at:
+        raise HTTPException(status_code=400, detail="이미 탈퇴한 회원입니다")
+
+    user.deleted_at = datetime.now()
+    user.status = "만료"
+
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": f"회원 {user_id} 탈퇴 처리 완료",
+        "deleted_at": str(user.deleted_at)
+    }
+
+
+class BanUserRequest(BaseModel):
+    reason: str = "관리자에 의한 추방"
+
+
+@app.post("/admin/users/{user_id}/ban")
+def ban_user(user_id: int, req: BanUserRequest, db: Session = Depends(get_db)):
+    """
+    회원 추방 (블랙리스트)
+    - is_banned = True, banned_at, ban_reason 저장
+    """
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자 없음")
+
+    if user.is_banned:
+        raise HTTPException(status_code=400, detail="이미 추방된 회원입니다")
+
+    user.is_banned = True
+    user.banned_at = datetime.now()
+    user.ban_reason = req.reason
+    user.status = "만료"
+
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": f"회원 {user_id} 추방 완료",
+        "ban_reason": user.ban_reason,
+        "banned_at": str(user.banned_at)
+    }
+
+
+@app.post("/admin/users/{user_id}/unban")
+def unban_user(user_id: int, db: Session = Depends(get_db)):
+    """회원 추방 해제"""
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자 없음")
+
+    if not user.is_banned:
+        raise HTTPException(status_code=400, detail="추방된 회원이 아닙니다")
+
+    user.is_banned = False
+    user.banned_at = None
+    user.ban_reason = None
+    user.status = "매칭전"
+
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": f"회원 {user_id} 추방 해제 완료"
+    }
+
+
+@app.get("/admin/users/candidates/{user_id}")
+def get_matching_candidates(user_id: int, db: Session = Depends(get_db)):
+    """
+    매칭 후보자 목록 조회
+    - 해당 회원의 이성 중 매칭전 상태인 회원 목록
+    - 추방되거나 탈퇴한 회원 제외
+    """
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자 없음")
+
+    # 이성 성별 결정
+    opposite_gender = "여" if user.gender == "남" else "남"
+
+    # 후보자 조회
+    candidates = db.query(User).filter(
+        User.gender == opposite_gender,
+        User.status == "매칭전",
+        User.is_banned == False,
+        User.deleted_at == None,
+        User.user_id != user_id
+    ).all()
+
+    return {
+        "user_id": user_id,
+        "user_gender": user.gender,
+        "opposite_gender": opposite_gender,
+        "total": len(candidates),
+        "candidates": [
+            {
+                "user_id": c.user_id,
+                "name": c.name,
+                "age": c.age,
+                "gender": c.gender,
+                "birth_date": c.birth_date,
+                "membership_type": c.membership_type,
+                "matching_count": c.matching_count
+            }
+            for c in candidates
+        ]
+    }
+
+
+@app.delete("/admin/users/match/{user_id}")
+def unmatch_user(user_id: int, db: Session = Depends(get_db)):
+    """
+    매칭 해제
+    - matched_partner를 None으로 설정
+    - 상태를 매칭전으로 변경
+    """
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자 없음")
+
+    if not user.matched_partner:
+        raise HTTPException(status_code=400, detail="매칭된 상대가 없습니다")
+
+    old_partner_id = user.matched_partner
+    user.matched_partner = None
+    user.status = "매칭전"
+
+    # 상대방도 매칭 해제
+    partner = db.query(User).filter(User.user_id == old_partner_id).first()
+    if partner and partner.matched_partner == user_id:
+        partner.matched_partner = None
+        partner.status = "매칭전"
+
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": f"회원 {user_id}와 {old_partner_id} 매칭 해제 완료"
+    }
+
+
+@app.get("/admin/stats")
+def get_admin_stats(db: Session = Depends(get_db)):
+    """
+    관리자 대시보드 통계
+    - 전체 회원 수, 상태별 회원 수, 결제 회원 수 등
+    """
+    # 전체 회원 (탈퇴 제외)
+    total_users = db.query(User).filter(User.deleted_at == None).count()
+
+    # 상태별 회원 수
+    status_counts = {}
+    for status in ["매칭전", "매칭중", "성혼", "만료"]:
+        count = db.query(User).filter(
+            User.status == status,
+            User.deleted_at == None
+        ).count()
+        status_counts[status] = count
+
+    # 성별 회원 수
+    gender_counts = {}
+    for gender in ["남", "여"]:
+        count = db.query(User).filter(
+            User.gender == gender,
+            User.deleted_at == None
+        ).count()
+        gender_counts[gender] = count
+
+    # 결제 회원 수
+    paid_users = db.query(User).filter(
+        User.payment_date != None,
+        User.deleted_at == None
+    ).count()
+
+    # 추방된 회원 수
+    banned_users = db.query(User).filter(
+        User.is_banned == True
+    ).count()
+
+    # 매칭된 회원 수
+    matched_users = db.query(User).filter(
+        User.matched_partner != None,
+        User.deleted_at == None
+    ).count()
+
+    return {
+        "total_users": total_users,
+        "status_counts": status_counts,
+        "gender_counts": gender_counts,
+        "paid_users": paid_users,
+        "banned_users": banned_users,
+        "matched_users": matched_users
+    }
