@@ -1,7 +1,7 @@
 # db.py
 # PostgreSQL 버전 (MySQL에서 마이그레이션)
 import os
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, BigInteger, Boolean, Text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, BigInteger, Boolean, Text, Date, ForeignKey, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
@@ -74,6 +74,83 @@ class Admin(Base):
     role = Column(String(20), default="admin")                   # 역할 (super_admin/admin)
     created_at = Column(DateTime, nullable=True)                 # 생성일
     last_login = Column(DateTime, nullable=True)                 # 마지막 로그인
+
+
+class Consultation(Base):
+    """상담 요청 모델"""
+    __tablename__ = "consultations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)
+
+    # 상담 일정
+    requested_date = Column(Date, nullable=False)                # 희망 상담일
+    requested_time = Column(String(10), nullable=False)          # 희망 시간 (HH:MM)
+
+    # 상담 내용
+    consultation_type = Column(String(20), nullable=False)       # 초기상담/매칭상담/사후상담
+    description = Column(Text, nullable=True)                    # 상담 내용/요청사항
+
+    # 상태 관리
+    status = Column(String(20), default="요청됨")                # 요청됨/확인됨/완료됨/취소됨
+    admin_note = Column(Text, nullable=True)                     # 관리자 메모
+
+    # 확정 일정
+    confirmed_date = Column(Date, nullable=True)                 # 확정된 상담일
+    confirmed_time = Column(String(10), nullable=True)           # 확정된 시간
+    completed_at = Column(DateTime, nullable=True)               # 완료 시간
+
+    # 타임스탬프
+    created_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=True)
+
+
+class Meeting(Base):
+    """만남 기록 모델"""
+    __tablename__ = "meetings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # 참여자 (양쪽 사용자)
+    user_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)
+    partner_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)
+
+    # 만남 일정
+    meeting_date = Column(Date, nullable=False)                  # 만남 날짜
+    meeting_time = Column(String(10), nullable=True)             # 만남 시간
+    location = Column(String(200), nullable=True)                # 만남 장소
+
+    # 상태
+    status = Column(String(20), default="예약됨")                # 예약됨/완료됨/취소됨
+
+    # 타임스탬프
+    created_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=True)
+
+
+class MeetingReview(Base):
+    """만남 후기/평가 모델"""
+    __tablename__ = "meeting_reviews"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=False)
+
+    # 작성자 정보
+    reviewer_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)
+    reviewed_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False)
+
+    # 평가 내용
+    rating = Column(Integer, nullable=False)                     # 1-5점 평가
+    content = Column(Text, nullable=True)                        # 후기 내용
+
+    # 다음 만남 의향
+    next_meeting_intent = Column(String(20), nullable=True)      # 원함/미정/원하지않음
+
+    # 비공개 여부 (상대방에게 공개할지)
+    is_private = Column(Boolean, default=True)                   # 기본: 관리자만 열람
+
+    # 타임스탬프
+    created_at = Column(DateTime, nullable=True)
 
 
 # 테이블 생성 함수

@@ -2,8 +2,9 @@
 from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from db import SessionLocal, engine, User  # ✅ 수정됨
-from datetime import datetime
+from db import SessionLocal, engine, User, Consultation, Meeting, MeetingReview
+from datetime import datetime, date
+from typing import Optional
 import os
 import httpx
 from fastapi.middleware.cors import CORSMiddleware
@@ -655,4 +656,485 @@ def get_admin_stats(db: Session = Depends(get_db)):
         "paid_users": paid_users,
         "banned_users": banned_users,
         "matched_users": matched_users
+    }
+
+
+# ===== 상담 요청 API =====
+
+class ConsultationCreateRequest(BaseModel):
+    user_id: int
+    requested_date: str              # YYYY-MM-DD
+    requested_time: str              # HH:MM
+    consultation_type: str           # 초기상담/매칭상담/사후상담
+    description: Optional[str] = None
+
+
+class ConsultationConfirmRequest(BaseModel):
+    confirmed_date: str              # YYYY-MM-DD
+    confirmed_time: str              # HH:MM
+    admin_note: Optional[str] = None
+
+
+@app.post("/consultations")
+def create_consultation(req: ConsultationCreateRequest, db: Session = Depends(get_db)):
+    """상담 요청 생성"""
+    # 사용자 확인
+    user = db.query(User).filter(User.user_id == req.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자 없음")
+
+    # 상담 유형 검증
+    valid_types = ["초기상담", "매칭상담", "사후상담"]
+    if req.consultation_type not in valid_types:
+        raise HTTPException(status_code=400, detail=f"유효하지 않은 상담 유형: {req.consultation_type}")
+
+    consultation = Consultation(
+        user_id=req.user_id,
+        requested_date=datetime.strptime(req.requested_date, "%Y-%m-%d").date(),
+        requested_time=req.requested_time,
+        consultation_type=req.consultation_type,
+        description=req.description,
+        status="요청됨",
+        created_at=datetime.now()
+    )
+
+    db.add(consultation)
+    db.commit()
+    db.refresh(consultation)
+
+    return {
+        "status": "success",
+        "consultation": {
+            "id": consultation.id,
+            "user_id": consultation.user_id,
+            "requested_date": str(consultation.requested_date),
+            "requested_time": consultation.requested_time,
+            "consultation_type": consultation.consultation_type,
+            "status": consultation.status
+        }
+    }
+
+
+@app.get("/consultations/my")
+def get_my_consultations(user_id: int, db: Session = Depends(get_db)):
+    """내 상담 요청 목록"""
+    consultations = db.query(Consultation).filter(
+        Consultation.user_id == user_id
+    ).order_by(Consultation.created_at.desc()).all()
+
+    return {
+        "total": len(consultations),
+        "consultations": [
+            {
+                "id": c.id,
+                "requested_date": str(c.requested_date),
+                "requested_time": c.requested_time,
+                "consultation_type": c.consultation_type,
+                "description": c.description,
+                "status": c.status,
+                "confirmed_date": str(c.confirmed_date) if c.confirmed_date else None,
+                "confirmed_time": c.confirmed_time,
+                "created_at": str(c.created_at) if c.created_at else None
+            }
+            for c in consultations
+        ]
+    }
+
+
+@app.get("/consultations/{consultation_id}")
+def get_consultation(consultation_id: int, db: Session = Depends(get_db)):
+    """상담 상세 조회"""
+    consultation = db.query(Consultation).filter(Consultation.id == consultation_id).first()
+    if not consultation:
+        raise HTTPException(status_code=404, detail="상담 요청을 찾을 수 없습니다")
+
+    return {
+        "id": consultation.id,
+        "user_id": consultation.user_id,
+        "requested_date": str(consultation.requested_date),
+        "requested_time": consultation.requested_time,
+        "consultation_type": consultation.consultation_type,
+        "description": consultation.description,
+        "status": consultation.status,
+        "admin_note": consultation.admin_note,
+        "confirmed_date": str(consultation.confirmed_date) if consultation.confirmed_date else None,
+        "confirmed_time": consultation.confirmed_time,
+        "completed_at": str(consultation.completed_at) if consultation.completed_at else None,
+        "created_at": str(consultation.created_at) if consultation.created_at else None
+    }
+
+
+@app.put("/consultations/{consultation_id}/cancel")
+def cancel_consultation(consultation_id: int, db: Session = Depends(get_db)):
+    """상담 취소"""
+    consultation = db.query(Consultation).filter(Consultation.id == consultation_id).first()
+    if not consultation:
+        raise HTTPException(status_code=404, detail="상담 요청을 찾을 수 없습니다")
+
+    if consultation.status == "완료됨":
+        raise HTTPException(status_code=400, detail="이미 완료된 상담은 취소할 수 없습니다")
+
+    consultation.status = "취소됨"
+    consultation.updated_at = datetime.now()
+    db.commit()
+
+    return {"status": "success", "message": "상담이 취소되었습니다"}
+
+
+@app.get("/admin/consultations")
+def get_all_consultations(
+    status: str = None,
+    consultation_type: str = None,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """관리자용 전체 상담 목록"""
+    query = db.query(Consultation)
+
+    if status:
+        query = query.filter(Consultation.status == status)
+    if consultation_type:
+        query = query.filter(Consultation.consultation_type == consultation_type)
+
+    total = query.count()
+    consultations = query.order_by(Consultation.created_at.desc()).offset(skip).limit(limit).all()
+
+    return {
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "consultations": [
+            {
+                "id": c.id,
+                "user_id": c.user_id,
+                "requested_date": str(c.requested_date),
+                "requested_time": c.requested_time,
+                "consultation_type": c.consultation_type,
+                "description": c.description,
+                "status": c.status,
+                "admin_note": c.admin_note,
+                "confirmed_date": str(c.confirmed_date) if c.confirmed_date else None,
+                "confirmed_time": c.confirmed_time,
+                "created_at": str(c.created_at) if c.created_at else None
+            }
+            for c in consultations
+        ]
+    }
+
+
+@app.put("/admin/consultations/{consultation_id}/confirm")
+def confirm_consultation(consultation_id: int, req: ConsultationConfirmRequest, db: Session = Depends(get_db)):
+    """상담 확정 (관리자)"""
+    consultation = db.query(Consultation).filter(Consultation.id == consultation_id).first()
+    if not consultation:
+        raise HTTPException(status_code=404, detail="상담 요청을 찾을 수 없습니다")
+
+    consultation.status = "확인됨"
+    consultation.confirmed_date = datetime.strptime(req.confirmed_date, "%Y-%m-%d").date()
+    consultation.confirmed_time = req.confirmed_time
+    consultation.admin_note = req.admin_note
+    consultation.updated_at = datetime.now()
+    db.commit()
+
+    return {"status": "success", "message": "상담이 확정되었습니다"}
+
+
+@app.put("/admin/consultations/{consultation_id}/complete")
+def complete_consultation(consultation_id: int, db: Session = Depends(get_db)):
+    """상담 완료 처리 (관리자)"""
+    consultation = db.query(Consultation).filter(Consultation.id == consultation_id).first()
+    if not consultation:
+        raise HTTPException(status_code=404, detail="상담 요청을 찾을 수 없습니다")
+
+    consultation.status = "완료됨"
+    consultation.completed_at = datetime.now()
+    consultation.updated_at = datetime.now()
+
+    # 사용자의 상담 횟수 증가
+    user = db.query(User).filter(User.user_id == consultation.user_id).first()
+    if user:
+        user.consultation_count = (user.consultation_count or 0) + 1
+        user.last_consultation = datetime.now()
+        if not user.first_consultation:
+            user.first_consultation = datetime.now()
+
+    db.commit()
+
+    return {"status": "success", "message": "상담이 완료 처리되었습니다"}
+
+
+# ===== 만남 관리 API =====
+
+class MeetingCreateRequest(BaseModel):
+    user_id: int
+    partner_id: int
+    meeting_date: str                # YYYY-MM-DD
+    meeting_time: Optional[str] = None
+    location: Optional[str] = None
+
+
+class MeetingReviewCreateRequest(BaseModel):
+    reviewer_id: int
+    reviewed_id: int
+    rating: int                      # 1-5
+    content: Optional[str] = None
+    next_meeting_intent: Optional[str] = None  # 원함/미정/원하지않음
+
+
+@app.post("/meetings")
+def create_meeting(req: MeetingCreateRequest, db: Session = Depends(get_db)):
+    """만남 일정 생성"""
+    # 사용자 확인
+    user = db.query(User).filter(User.user_id == req.user_id).first()
+    partner = db.query(User).filter(User.user_id == req.partner_id).first()
+
+    if not user or not partner:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    meeting = Meeting(
+        user_id=req.user_id,
+        partner_id=req.partner_id,
+        meeting_date=datetime.strptime(req.meeting_date, "%Y-%m-%d").date(),
+        meeting_time=req.meeting_time,
+        location=req.location,
+        status="예약됨",
+        created_at=datetime.now()
+    )
+
+    db.add(meeting)
+    db.commit()
+    db.refresh(meeting)
+
+    return {
+        "status": "success",
+        "meeting": {
+            "id": meeting.id,
+            "user_id": meeting.user_id,
+            "partner_id": meeting.partner_id,
+            "meeting_date": str(meeting.meeting_date),
+            "meeting_time": meeting.meeting_time,
+            "location": meeting.location,
+            "status": meeting.status
+        }
+    }
+
+
+@app.get("/meetings/my")
+def get_my_meetings(user_id: int, db: Session = Depends(get_db)):
+    """내 만남 목록"""
+    meetings = db.query(Meeting).filter(
+        (Meeting.user_id == user_id) | (Meeting.partner_id == user_id)
+    ).order_by(Meeting.meeting_date.desc()).all()
+
+    return {
+        "total": len(meetings),
+        "meetings": [
+            {
+                "id": m.id,
+                "user_id": m.user_id,
+                "partner_id": m.partner_id,
+                "meeting_date": str(m.meeting_date),
+                "meeting_time": m.meeting_time,
+                "location": m.location,
+                "status": m.status,
+                "created_at": str(m.created_at) if m.created_at else None
+            }
+            for m in meetings
+        ]
+    }
+
+
+@app.get("/meetings/{meeting_id}")
+def get_meeting(meeting_id: int, db: Session = Depends(get_db)):
+    """만남 상세 조회"""
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="만남을 찾을 수 없습니다")
+
+    # 후기 조회
+    reviews = db.query(MeetingReview).filter(MeetingReview.meeting_id == meeting_id).all()
+
+    return {
+        "id": meeting.id,
+        "user_id": meeting.user_id,
+        "partner_id": meeting.partner_id,
+        "meeting_date": str(meeting.meeting_date),
+        "meeting_time": meeting.meeting_time,
+        "location": meeting.location,
+        "status": meeting.status,
+        "created_at": str(meeting.created_at) if meeting.created_at else None,
+        "reviews": [
+            {
+                "id": r.id,
+                "reviewer_id": r.reviewer_id,
+                "rating": r.rating,
+                "next_meeting_intent": r.next_meeting_intent
+            }
+            for r in reviews
+        ]
+    }
+
+
+@app.put("/meetings/{meeting_id}/complete")
+def complete_meeting(meeting_id: int, db: Session = Depends(get_db)):
+    """만남 완료 처리"""
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="만남을 찾을 수 없습니다")
+
+    meeting.status = "완료됨"
+    meeting.updated_at = datetime.now()
+    db.commit()
+
+    return {"status": "success", "message": "만남이 완료 처리되었습니다"}
+
+
+@app.put("/meetings/{meeting_id}/cancel")
+def cancel_meeting(meeting_id: int, db: Session = Depends(get_db)):
+    """만남 취소"""
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="만남을 찾을 수 없습니다")
+
+    meeting.status = "취소됨"
+    meeting.updated_at = datetime.now()
+    db.commit()
+
+    return {"status": "success", "message": "만남이 취소되었습니다"}
+
+
+@app.post("/meetings/{meeting_id}/reviews")
+def create_meeting_review(meeting_id: int, req: MeetingReviewCreateRequest, db: Session = Depends(get_db)):
+    """만남 후기 작성"""
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="만남을 찾을 수 없습니다")
+
+    # 평점 검증
+    if req.rating < 1 or req.rating > 5:
+        raise HTTPException(status_code=400, detail="평점은 1-5 사이여야 합니다")
+
+    # 중복 후기 방지
+    existing_review = db.query(MeetingReview).filter(
+        MeetingReview.meeting_id == meeting_id,
+        MeetingReview.reviewer_id == req.reviewer_id
+    ).first()
+    if existing_review:
+        raise HTTPException(status_code=400, detail="이미 후기를 작성했습니다")
+
+    review = MeetingReview(
+        meeting_id=meeting_id,
+        reviewer_id=req.reviewer_id,
+        reviewed_id=req.reviewed_id,
+        rating=req.rating,
+        content=req.content,
+        next_meeting_intent=req.next_meeting_intent,
+        is_private=True,
+        created_at=datetime.now()
+    )
+
+    db.add(review)
+    db.commit()
+    db.refresh(review)
+
+    return {
+        "status": "success",
+        "review": {
+            "id": review.id,
+            "meeting_id": review.meeting_id,
+            "rating": review.rating,
+            "next_meeting_intent": review.next_meeting_intent
+        }
+    }
+
+
+@app.get("/admin/meetings")
+def get_all_meetings(
+    status: str = None,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """관리자용 전체 만남 목록"""
+    query = db.query(Meeting)
+
+    if status:
+        query = query.filter(Meeting.status == status)
+
+    total = query.count()
+    meetings = query.order_by(Meeting.meeting_date.desc()).offset(skip).limit(limit).all()
+
+    return {
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "meetings": [
+            {
+                "id": m.id,
+                "user_id": m.user_id,
+                "partner_id": m.partner_id,
+                "meeting_date": str(m.meeting_date),
+                "meeting_time": m.meeting_time,
+                "location": m.location,
+                "status": m.status,
+                "created_at": str(m.created_at) if m.created_at else None
+            }
+            for m in meetings
+        ]
+    }
+
+
+@app.get("/admin/reviews")
+def get_all_reviews(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
+    """관리자용 전체 후기 열람"""
+    total = db.query(MeetingReview).count()
+    reviews = db.query(MeetingReview).order_by(MeetingReview.created_at.desc()).offset(skip).limit(limit).all()
+
+    return {
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "reviews": [
+            {
+                "id": r.id,
+                "meeting_id": r.meeting_id,
+                "reviewer_id": r.reviewer_id,
+                "reviewed_id": r.reviewed_id,
+                "rating": r.rating,
+                "content": r.content,
+                "next_meeting_intent": r.next_meeting_intent,
+                "created_at": str(r.created_at) if r.created_at else None
+            }
+            for r in reviews
+        ]
+    }
+
+
+@app.get("/admin/meetings/stats")
+def get_meeting_stats(db: Session = Depends(get_db)):
+    """만남 통계"""
+    total_meetings = db.query(Meeting).count()
+    completed_meetings = db.query(Meeting).filter(Meeting.status == "완료됨").count()
+    cancelled_meetings = db.query(Meeting).filter(Meeting.status == "취소됨").count()
+
+    total_reviews = db.query(MeetingReview).count()
+    avg_rating = db.query(MeetingReview).with_entities(
+        db.query(MeetingReview.rating).scalar_subquery()
+    ).scalar() or 0
+
+    # 다음 만남 의향 통계
+    intent_counts = {}
+    for intent in ["원함", "미정", "원하지않음"]:
+        count = db.query(MeetingReview).filter(
+            MeetingReview.next_meeting_intent == intent
+        ).count()
+        intent_counts[intent] = count
+
+    return {
+        "total_meetings": total_meetings,
+        "completed_meetings": completed_meetings,
+        "cancelled_meetings": cancelled_meetings,
+        "total_reviews": total_reviews,
+        "intent_counts": intent_counts
     }
